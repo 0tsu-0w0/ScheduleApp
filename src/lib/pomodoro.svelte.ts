@@ -15,6 +15,20 @@ export const PHASES: Record<Phase, { name: () => string; color: string }> = {
 
 const SETTINGS = ['focusMin', 'shortMin', 'longMin', 'longEvery', 'autoStart'] as const;
 
+/** Focus shorter than this is not saved when stopped early (an accidental start). */
+const MIN_SAVED_SECS = 60;
+/** How often a running focus session is saved, so quitting the app loses at most this much. */
+const SAVE_EVERY_MS = 60_000;
+
+/** The focus session being recorded. It is saved as it goes, so stopping early never loses it. */
+interface FocusRecord {
+  /** Database row once saved. */
+  id: number | null;
+  startedTs: number;
+  /** Time actually focused, without pauses. */
+  focusedMs: number;
+}
+
 class Pomodoro {
   focusMin = $state(25);
   shortMin = $state(5);
@@ -32,7 +46,12 @@ class Pomodoro {
   /** Whether the current phase has been started (it may be paused now). */
   started = $state(false);
   now = $state(Date.now());
-  private focusStartedTs: number | null = null;
+  private record: FocusRecord | null = null;
+  /** When the timer was last started or its time last added to `record` (focus only). */
+  private runStartedAt: number | null = null;
+  private lastSaved = 0;
+  /** Saves run one after another, so a session is never inserted twice. */
+  private saving: Promise<void> = Promise.resolve();
 
   constructor() {
     setInterval(() => this.tick(), 250);
@@ -72,7 +91,10 @@ class Pomodoro {
   }
 
   start() {
-    if (this.phase === 'focus' && this.focusStartedTs === null) this.focusStartedTs = Math.floor(Date.now() / 1000);
+    if (this.phase === 'focus') {
+      this.record ??= { id: null, startedTs: Math.floor(Date.now() / 1000), focusedMs: 0 };
+      this.runStartedAt = this.lastSaved = Date.now();
+    }
     this.started = true;
     this.endsAt = Date.now() + this.pausedRemaining;
     // Ask once, early, so the end-of-session notification can be shown.
@@ -86,6 +108,12 @@ class Pomodoro {
   pause() {
     this.pausedRemaining = this.remaining;
     this.endsAt = null;
+    if (this.phase === 'focus') {
+      this.bank(Date.now());
+      this.runStartedAt = null;
+      // Saved now, in case the app is closed before the session is resumed.
+      this.saveFocus(false);
+    }
   }
 
   toggle() {
@@ -94,10 +122,16 @@ class Pomodoro {
   }
 
   setPhase(phase: Phase) {
+    // Leaving a focus session early (skip, switching phase, reset) keeps the time focused so far.
+    if (this.record) {
+      if (this.endsAt !== null) this.bank(Date.now());
+      this.saveFocus(false);
+      this.record = null;
+    }
+    this.runStartedAt = null;
     this.phase = phase;
     this.endsAt = null;
     this.started = false;
-    this.focusStartedTs = null;
     this.pausedRemaining = this.phaseMs;
   }
 
@@ -105,13 +139,13 @@ class Pomodoro {
     this.setPhase(this.phase);
   }
 
-  async advance(finished: boolean) {
+  /** Moves to the next phase. `finished` = the timer ran out (at `end`); otherwise it was skipped. */
+  advance(finished: boolean, end = Date.now()) {
     let next: Phase = 'focus';
     if (this.phase === 'focus') {
-      if (finished) {
-        const end = Math.floor(Date.now() / 1000);
-        await api.addPomodoroSession(this.focusStartedTs ?? end - this.focusMin * 60, end, this.label).catch(() => {});
-        data.version++;
+      if (finished && this.record) {
+        this.saveFocus(true, end);
+        this.record = null;
         this.completed++;
       }
       next = this.completed > 0 && this.completed % Math.max(1, this.longEvery) === 0 ? 'long' : 'short';
@@ -120,12 +154,53 @@ class Pomodoro {
     if (finished && this.autoStart) this.start();
   }
 
+  /** Adds the time since the last start (or last call) to the focus record. */
+  private bank(until: number) {
+    if (!this.record || this.runStartedAt === null) return;
+    this.record.focusedMs += Math.max(0, until - this.runStartedAt);
+    this.runStartedAt = until;
+  }
+
+  /**
+   * Saves the current focus session (creating it the first time, updating it after that).
+   * `refresh` tells open pages to reload; it is off for the periodic save while running.
+   */
+  private saveFocus(completed: boolean, endMs = Date.now(), refresh = true) {
+    const r = this.record;
+    if (!r) return;
+    const focusedSecs = Math.round(r.focusedMs / 1000);
+    if (!completed && r.id === null && focusedSecs < MIN_SAVED_SECS) return;
+    const endedTs = Math.max(r.startedTs, Math.floor(endMs / 1000));
+    const label = this.label;
+    this.saving = this.saving.then(async () => {
+      try {
+        r.id = await api.savePomodoroSession(r.id, r.startedTs, endedTs, focusedSecs, completed, label);
+        if (refresh) data.version++;
+      } catch (e) {
+        toast(String(e), 'error');
+      }
+    });
+  }
+
   private tick() {
     this.now = Date.now();
-    if (this.endsAt === null || this.now < this.endsAt) return;
+    if (this.endsAt === null) return;
+    if (this.now < this.endsAt) {
+      if (this.phase === 'focus' && this.now - this.lastSaved >= SAVE_EVERY_MS) {
+        this.lastSaved = this.now;
+        this.bank(this.now);
+        this.saveFocus(false, this.now, false);
+      }
+      return;
+    }
+    const end = this.endsAt;
     const wasFocus = this.phase === 'focus';
+    if (wasFocus) {
+      this.bank(end);
+      this.runStartedAt = null;
+    }
     this.endsAt = null;
-    this.advance(true);
+    this.advance(true, end);
     const body = wasFocus ? t('pomo.doneFocus') : t('pomo.doneBreak');
     toast(body, 'success');
     sendNotification({ title: 'Nora Schedule', body });

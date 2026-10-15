@@ -62,7 +62,43 @@
     });
   });
 
-  const html = $derived(DOMPurify.sanitize(marked.parse(body || t('memo.nothingWritten'), { async: false, gfm: true, breaks: true })));
+  const html = $derived(
+    editorChecklists(DOMPurify.sanitize(marked.parse(body || t('memo.nothingWritten'), { async: false, gfm: true, breaks: true }))),
+  );
+
+  /**
+   * Markdown checklists come out as `<li><input disabled> text</li>`, which looks nothing like the
+   * editor (faded boxes, text wrapping under the box). Rebuild them with the editor's markup so the
+   * same styles apply. The boxes stay read-only; double-click the memo to edit.
+   */
+  function editorChecklists(source: string): string {
+    const tpl = document.createElement('template');
+    tpl.innerHTML = source;
+    for (const li of tpl.content.querySelectorAll('li')) {
+      // Tight lists put the box straight in the item; loose ones (blank lines between items) in a <p>.
+      const box = li.querySelector<HTMLInputElement>(':scope > input[type=checkbox], :scope > p:first-child > input[type=checkbox]');
+      if (!box) continue;
+      const host = box.parentElement === li ? li : box.parentElement!;
+      if (host.firstElementChild !== box) continue;
+      const checked = box.hasAttribute('checked');
+      box.remove();
+      if (host.firstChild?.nodeType === Node.TEXT_NODE) host.firstChild.textContent = host.firstChild.textContent!.trimStart();
+      box.removeAttribute('disabled');
+      box.tabIndex = -1;
+      box.className = 'view-only';
+      const label = document.createElement('label');
+      label.append(box);
+      const content = document.createElement('div');
+      content.append(...li.childNodes);
+      li.dataset.checked = String(checked);
+      li.append(label, content);
+    }
+    for (const ul of tpl.content.querySelectorAll('ul')) {
+      const items = [...ul.children];
+      if (items.length && items.every((li) => li.hasAttribute('data-checked'))) ul.dataset.type = 'taskList';
+    }
+    return tpl.innerHTML;
+  }
   const words = $derived(body.trim() ? body.trim().split(/\s+/).length : 0);
 
   async function flush() {

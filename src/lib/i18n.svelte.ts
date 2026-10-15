@@ -212,6 +212,8 @@ const en = {
   'pomo.doneBreak': 'Break is over. Ready to focus?',
   'pomo.decrease': 'Decrease',
   'pomo.increase': 'Increase',
+  'pomo.focusedFor': '{d} focused',
+  'pomo.stoppedEarly': 'stopped early',
 
   'memo.modeRich': 'Rich text',
   'memo.modeMarkdown': 'Markdown',
@@ -1153,6 +1155,8 @@ const ko: Record<Key, string> = {
   'pomo.doneBreak': '휴식 끝! 다시 집중해 볼까요?',
   'pomo.decrease': '줄이기',
   'pomo.increase': '늘리기',
+  'pomo.focusedFor': '{d} 집중',
+  'pomo.stoppedEarly': '중간에 멈춤',
 
   'memo.modeRich': '서식 편집',
   'memo.modeMarkdown': '마크다운',

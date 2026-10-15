@@ -224,9 +224,14 @@ export interface MemoGroup {
 }
 
 export interface PomodoroSession {
+  id: number;
   started_at: number;
   ended_at: number;
   label: string;
+  /** Time actually spent focusing, without pauses. */
+  focused_secs: number;
+  /** false when stopped early (paused and left, skipped or reset). */
+  completed: boolean;
 }
 
 export interface Activity {
@@ -345,8 +350,8 @@ export const api = {
   updateMemo: (id: number, title: string, body: string) => invoke<void>('update_memo', { id, title, body }),
   deleteMemo: (id: number) => invoke<void>('delete_memo', { id }),
 
-  addPomodoroSession: (startedAt: number, endedAt: number, label: string) =>
-    invoke<void>('add_pomodoro_session', { startedAt, endedAt, label }),
+  savePomodoroSession: (id: number | null, startedAt: number, endedAt: number, focusedSecs: number, completed: boolean, label: string) =>
+    invoke<number>('save_pomodoro_session', { id, startedAt, endedAt, focusedSecs, completed, label }),
   pomodoroSessions: (fromTs: number, toTs: number) =>
     invoke<PomodoroSession[]>('pomodoro_sessions', { fromTs, toTs }),
 

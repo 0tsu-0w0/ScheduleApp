@@ -1,7 +1,7 @@
 // Dev-only: lets the UI run in a normal browser (outside Tauri) with sample data.
 // Loaded from main.ts only when `import.meta.env.DEV` and Tauri is absent.
 // Supports `?page=todos&theme=dark` to open a specific page.
-import { mockIPC } from '@tauri-apps/api/mocks';
+import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
 import type { Activity, Bookmark, BookmarkFolder, CalEvent, DDay, Expense, Meal, Memo, MemoGroup, Workout, PomodoroSession, Tag, Todo, TodoGroup, TrpgEntry, Book } from './api';
 import { addDays, addMinutes, addMonths, dayStartTs, diffDays, eventSpan, parseYmd, timeOf, today, toDateTime } from './dates';
 
@@ -106,7 +106,7 @@ export function installMock() {
       ts += len + 600;
     });
     const s = dayStartTs(addDays(t, -d)) + 14 * 3600;
-    if (s + 1500 < now && d % 3 !== 2) sessions.push({ started_at: s, ended_at: s + 1500, label: 'Ship v1.0' });
+    if (s + 1500 < now && d % 3 !== 2) sessions.push({ id: 7000 + d, started_at: s, ended_at: s + 1500, label: 'Ship v1.0', focused_secs: 1500, completed: true });
   }
   const folders: BookmarkFolder[] = [
     { id: 1, name: 'Work', parent_id: null, color: 0x7c74ff },
@@ -179,6 +179,8 @@ export function installMock() {
   if (previewLocale) settings['ui.locale'] = previewLocale;
   let tracker = { paused: false, idle_threshold_secs: 300, tracked_apps: ['Code', 'Google Chrome'] };
 
+  // The window code (overlay panel, sync) asks which window it is running in.
+  mockWindows('main');
   mockIPC((cmd, a: any) => {
     switch (cmd) {
       case 'get_setting': return settings[a.key] ?? null;
@@ -269,7 +271,12 @@ export function installMock() {
       }
       case 'update_memo': Object.assign(memos.find((m) => m.id === a.id)!, { title: a.title, body: a.body, updated_at: Date.now() / 1000 }); return null;
       case 'delete_memo': memos.splice(memos.findIndex((m) => m.id === a.id), 1); return null;
-      case 'add_pomodoro_session': sessions.push({ started_at: a.startedAt, ended_at: a.endedAt, label: a.label }); return null;
+      case 'save_pomodoro_session': {
+        const row = { id: a.id ?? nextId++, started_at: a.startedAt, ended_at: a.endedAt, label: a.label, focused_secs: a.focusedSecs, completed: a.completed };
+        const i = sessions.findIndex((s) => s.id === row.id);
+        if (i < 0) sessions.push(row); else sessions[i] = row;
+        return row.id;
+      }
       case 'pomodoro_sessions': return sessions.filter((s) => s.ended_at > a.fromTs && s.started_at < a.toTs);
       case 'activity_summary': {
         const days: string[] = a.days;

@@ -208,6 +208,8 @@ export const ja: Record<Key, string> = {
   'pomo.doneBreak': '休憩終わり。集中する準備はできましたか？',
   'pomo.decrease': '減らす',
   'pomo.increase': '増やす',
+  'pomo.focusedFor': '{d}集中',
+  'pomo.stoppedEarly': '途中で終了',
 
   'memo.modeRich': 'リッチテキスト',
   'memo.modeMarkdown': 'Markdown',

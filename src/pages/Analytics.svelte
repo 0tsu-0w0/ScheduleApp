@@ -41,7 +41,7 @@
     days.map((d) => ({ label: label(d), value: items.filter((t) => dayOf(t) === d).reduce((s, t) => s + value(t), 0) }));
 
   const workPerDay = $derived(days.map((d, i) => ({ label: label(d), value: summary?.per_day[i] ?? 0 })));
-  const focusPerDay = $derived(perDay(sessions, (s) => tsToDate(s.started_at), (s) => s.ended_at - s.started_at));
+  const focusPerDay = $derived(perDay(sessions, (s) => tsToDate(s.started_at), (s) => s.focused_secs));
   const donePerDay = $derived(perDay(todos, (t) => (t.done && t.completed_at ? tsToDate(t.completed_at) : null)));
   const createdPerDay = $derived(perDay(todos, (t) => tsToDate(t.created_at)));
 
@@ -52,7 +52,8 @@
   const overdue = $derived(todos.filter(isOverdue).length);
   const doneInRange = $derived(todos.filter((t) => t.completed_at && t.completed_at >= firstTs).length);
   const rate = $derived(todos.length ? Math.round((doneTotal / todos.length) * 100) : 0);
-  const focusTotal = $derived(sessions.reduce((s, x) => s + x.ended_at - x.started_at, 0));
+  const focusTotal = $derived(sessions.reduce((s, x) => s + x.focused_secs, 0));
+  const finishedSessions = $derived(sessions.filter((s) => s.completed).length);
   const nextDday = $derived(byDdayTarget(ddays.filter((d) => ddayUpcoming(d, todayStr)), todayStr)[0]);
   const activeDays = $derived(Math.max(1, summary?.per_day.filter((s) => s > 0).length ?? 1));
   const busiest = $derived.by(() => {
@@ -94,7 +95,7 @@
   {#if tab === 'all'}
     <div class="stats">
       <StatCard label={t('an.workedToday')} value={fmtDuration(summary?.per_day.at(-1) ?? 0)} sub={t('an.inDays', { d: fmtDuration(summary?.total ?? 0), n: span })} icon={Clock} />
-      <StatCard label={t('an.focusSessions')} value={String(sessions.length)} sub={t('an.focused', { d: fmtDuration(focusTotal) })} icon={Flame} tint="var(--focus)" />
+      <StatCard label={t('an.focusSessions')} value={String(finishedSessions)} sub={t('an.focused', { d: fmtDuration(focusTotal) })} icon={Flame} tint="var(--focus)" />
       <StatCard label={t('an.todosCompleted')} value={String(doneInRange)} sub={t('an.stillOpen', { n: openTotal })} icon={CircleCheck} tint="var(--success)" />
       <StatCard label={t('an.eventsWeek')} value={String(upcoming.length)} sub={t('an.next7')} icon={CalendarDays} tint="var(--long-break)" />
       <StatCard label={t('an.nextDday')} value={nextDday ? ddayLabel(nextDday) : '—'} sub={nextDday?.title ?? ''} icon={Target} tint="var(--warning)" />

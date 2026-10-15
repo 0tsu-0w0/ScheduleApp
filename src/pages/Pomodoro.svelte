@@ -18,7 +18,9 @@
 
   const R = 120;
   const C = 2 * Math.PI * R;
-  const focused = $derived(sessions.reduce((sum, s) => sum + s.ended_at - s.started_at, 0));
+  const focused = $derived(sessions.reduce((sum, s) => sum + s.focused_secs, 0));
+  /** Sessions stopped early still add their focus time, but only finished ones count as sessions. */
+  const finished = $derived(sessions.filter((s) => s.completed).length);
   const color = $derived(PHASES[pomodoro.phase].color);
 
   const settings: { key: 'focusMin' | 'shortMin' | 'longMin' | 'longEvery'; label: Key; unit: Key; max: number }[] = [
@@ -99,7 +101,7 @@
       <div class="card stats">
         <div class="stat">
           <div class="icon focus"><Flame size={18} /></div>
-          <div><div class="big">{sessions.length}</div><div class="muted small">{t('pomo.sessionsToday')}</div></div>
+          <div><div class="big">{finished}</div><div class="muted small">{t('pomo.sessionsToday')}</div></div>
         </div>
         <div class="stat">
           <div class="icon rest"><Coffee size={18} /></div>
@@ -133,11 +135,14 @@
           <p class="muted small" style="margin-top: 8px">{t('pomo.noSessions')}</p>
         {/if}
         <div class="sessions">
-          {#each [...sessions].reverse() as s, i (i)}
-            <div class="session">
+          {#each [...sessions].reverse() as s (s.id)}
+            <div class="session" class:partial={!s.completed}>
               <span class="session-icon"><Flame size={15} /></span>
               <span class="tabular muted">{fmtTs(s.started_at)} – {fmtTs(s.ended_at)}</span>
               <span class="truncate">{s.label || t('pomo.focus')}</span>
+              <span class="session-meta tabular">
+                {t('pomo.focusedFor', { d: fmtDuration(s.focused_secs) })}{#if !s.completed}{` · ${t('pomo.stoppedEarly')}`}{/if}
+              </span>
             </div>
           {/each}
         </div>
@@ -342,5 +347,14 @@
     .stats {
       grid-template-columns: 1fr;
     }
+  }
+  .session-meta {
+    margin-left: auto;
+    flex: none;
+    font-size: 12px;
+    color: var(--faint);
+  }
+  .session.partial .session-icon {
+    opacity: 0.55;
   }
 </style>

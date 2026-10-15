@@ -168,7 +168,7 @@ fn main() {
             commands::delete_memo_group,
             commands::update_memo,
             commands::delete_memo,
-            commands::add_pomodoro_session,
+            commands::save_pomodoro_session,
             commands::pomodoro_sessions,
             commands::activity_summary,
             commands::activity_timeline,

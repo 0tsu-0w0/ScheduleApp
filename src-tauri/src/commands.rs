@@ -274,8 +274,21 @@ pub fn delete_memo(state: State<AppState>, id: i64) -> CmdResult<()> {
 // ---- pomodoro -----------------------------------------------------------------
 
 #[tauri::command]
-pub fn add_pomodoro_session(state: State<AppState>, started_at: i64, ended_at: i64, label: String) -> CmdResult<()> {
-    with_db(&state, |db| db.add_pomodoro_session(started_at, ended_at, label.trim()))
+pub fn save_pomodoro_session(
+    state: State<AppState>,
+    id: Option<i64>,
+    started_at: i64,
+    ended_at: i64,
+    focused_secs: i64,
+    completed: bool,
+    label: String,
+) -> CmdResult<i64> {
+    if ended_at < started_at || focused_secs < 0 {
+        return Err("invalid session".into());
+    }
+    // Focus time can't be longer than the session itself.
+    let focused_secs = focused_secs.min(ended_at - started_at);
+    with_db(&state, |db| db.save_pomodoro_session(id, started_at, ended_at, focused_secs, completed, label.trim()))
 }
 
 #[tauri::command]

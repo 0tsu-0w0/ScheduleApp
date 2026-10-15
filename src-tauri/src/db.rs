@@ -85,10 +85,12 @@ CREATE TABLE IF NOT EXISTS memos (
 );
 
 CREATE TABLE IF NOT EXISTS pomodoro_sessions (
-    id         INTEGER PRIMARY KEY,
-    started_at INTEGER NOT NULL,
-    ended_at   INTEGER NOT NULL,
-    label      TEXT    NOT NULL DEFAULT ''
+    id           INTEGER PRIMARY KEY,
+    started_at   INTEGER NOT NULL,
+    ended_at     INTEGER NOT NULL,
+    label        TEXT    NOT NULL DEFAULT '',
+    focused_secs INTEGER,
+    completed    INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS activity (
@@ -365,9 +367,14 @@ pub struct MemoGroup {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct PomodoroSession {
+    pub id: i64,
     pub started_at: i64,
     pub ended_at: i64,
     pub label: String,
+    /// Time actually spent focusing, without pauses.
+    pub focused_secs: i64,
+    /// false when the session was stopped early (paused and left, skipped or reset).
+    pub completed: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -559,6 +566,16 @@ fn migrate(conn: &Connection) -> DbResult<()> {
         conn.execute_batch(
             "ALTER TABLE events ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';
              ALTER TABLE events ADD COLUMN reminder INTEGER;",
+        )?;
+    }
+    // Sessions used to be saved only when the timer ran out, so they had no separate focus time.
+    let has_focused_secs = conn
+        .prepare("SELECT 1 FROM pragma_table_info('pomodoro_sessions') WHERE name = 'focused_secs'")?
+        .exists([])?;
+    if !has_focused_secs {
+        conn.execute_batch(
+            "ALTER TABLE pomodoro_sessions ADD COLUMN focused_secs INTEGER;
+             ALTER TABLE pomodoro_sessions ADD COLUMN completed INTEGER NOT NULL DEFAULT 1;",
         )?;
     }
     Ok(())
@@ -1014,21 +1031,47 @@ impl Db {
 
     // ---- pomodoro ---------------------------------------------------------
 
-    pub fn add_pomodoro_session(&self, started_at: i64, ended_at: i64, label: &str) -> DbResult<()> {
+    /// Creates a focus session (`id` = None) or updates one that is still going, and returns its id.
+    /// A session is saved while it runs, so stopping early or quitting never loses the time focused.
+    pub fn save_pomodoro_session(
+        &self,
+        id: Option<i64>,
+        started_at: i64,
+        ended_at: i64,
+        focused_secs: i64,
+        completed: bool,
+        label: &str,
+    ) -> DbResult<i64> {
+        if let Some(id) = id {
+            let changed = self.conn.execute(
+                "UPDATE pomodoro_sessions SET started_at=?1, ended_at=?2, focused_secs=?3, completed=?4, label=?5 WHERE id=?6",
+                params![started_at, ended_at, focused_secs, completed, label, id],
+            )?;
+            if changed > 0 {
+                return Ok(id);
+            }
+        }
         self.conn.execute(
-            "INSERT INTO pomodoro_sessions(started_at, ended_at, label) VALUES(?1, ?2, ?3)",
-            params![started_at, ended_at, label],
+            "INSERT INTO pomodoro_sessions(started_at, ended_at, focused_secs, completed, label) VALUES(?1, ?2, ?3, ?4, ?5)",
+            params![started_at, ended_at, focused_secs, completed, label],
         )?;
-        Ok(())
+        Ok(self.conn.last_insert_rowid())
     }
 
     pub fn pomodoro_sessions(&self, from_ts: i64, to_ts: i64) -> DbResult<Vec<PomodoroSession>> {
         let mut st = self.conn.prepare(
-            "SELECT started_at, ended_at, label FROM pomodoro_sessions
-             WHERE ended_at > ?1 AND started_at < ?2 ORDER BY started_at",
+            "SELECT id, started_at, ended_at, label, COALESCE(focused_secs, ended_at - started_at), completed
+             FROM pomodoro_sessions WHERE ended_at > ?1 AND started_at < ?2 ORDER BY started_at",
         )?;
         st.query_map([from_ts, to_ts], |r| {
-            Ok(PomodoroSession { started_at: r.get(0)?, ended_at: r.get(1)?, label: r.get(2)? })
+            Ok(PomodoroSession {
+                id: r.get(0)?,
+                started_at: r.get(1)?,
+                ended_at: r.get(2)?,
+                label: r.get(3)?,
+                focused_secs: r.get(4)?,
+                completed: r.get(5)?,
+            })
         })?
         .collect()
     }
@@ -1167,6 +1210,44 @@ pub(crate) mod tests {
         t.due = None;
         db.update_todo(&t).unwrap();
         assert_eq!(db.todos().unwrap()[0].due_time, None);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_focus_session_is_saved_while_it_runs_and_kept_when_stopped_early() {
+        let (db, path) = temp_db();
+        // Focused 10 minutes, paused for 5, then 3 more minutes and skipped to the break.
+        let id = db.save_pomodoro_session(None, 1000, 1600, 600, false, "essay").unwrap();
+        let same = db.save_pomodoro_session(Some(id), 1000, 2080, 780, false, "essay").unwrap();
+        assert_eq!(same, id);
+        let s = db.pomodoro_sessions(0, 10_000).unwrap();
+        assert_eq!(s.len(), 1);
+        assert_eq!((s[0].focused_secs, s[0].ended_at, s[0].completed), (780, 2080, false));
+
+        // A session whose row is gone (e.g. data was reset) is saved again instead of lost.
+        let fresh = db.save_pomodoro_session(Some(9999), 3000, 4500, 1500, true, "").unwrap();
+        assert_ne!(fresh, 9999);
+        assert_eq!(db.pomodoro_sessions(0, 10_000).unwrap().len(), 2);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn migration_keeps_old_pomodoro_sessions_as_completed() {
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let path = std::env::temp_dir().join(format!("nora_pomo_{}_{}.sqlite3", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+        let _ = std::fs::remove_file(&path);
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE pomodoro_sessions (id INTEGER PRIMARY KEY, started_at INTEGER NOT NULL,
+                 ended_at INTEGER NOT NULL, label TEXT NOT NULL DEFAULT '');
+                 INSERT INTO pomodoro_sessions(started_at, ended_at, label) VALUES(100, 1600, 'old');",
+            )
+            .unwrap();
+        }
+        let db = Db::open(&path).unwrap();
+        let s = db.pomodoro_sessions(0, 10_000).unwrap();
+        assert_eq!((s[0].focused_secs, s[0].completed), (1500, true));
         let _ = std::fs::remove_file(path);
     }
 
