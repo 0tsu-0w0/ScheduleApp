@@ -135,6 +135,7 @@ fn main() {
             commands::trpg_entries,
             commands::save_trpg_entry,
             commands::delete_trpg_entry,
+            commands::reorder_trpg_entries,
             commands::books,
             commands::save_book,
             commands::delete_book,

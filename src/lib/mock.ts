@@ -148,7 +148,7 @@ export function installMock() {
     });
     if (d <= 0 && d % 2 === 0) workouts.push({ id: 6000 + d + 6, date: day, kind: d === 0 ? 'running' : 'walking', minutes: d === 0 ? 30 : 45, kcal: d === 0 ? 294 : 158, note: '' });
   }
-  const trpg: TrpgEntry[] = [
+  const trpg: TrpgEntry[] = ([
     { id: 2000, kind: 'rulebook', title: 'Call of Cthulhu 7th Edition', writer: 'Chaosium', system: 'CoC 7th', links: [], image: null, date: null, role: '', pair: '', folder: '', memo: '', created_at: now - 86_400 * 90 },
     { id: 2001, kind: 'scenario_book', title: 'Doors to Darkness', writer: 'Chaosium', system: 'CoC 7th', links: [], image: null, date: null, role: '', pair: '', folder: '', memo: '5 starter scenarios', created_at: now - 86_400 * 60 },
     { id: 2002, kind: 'played', title: 'COSMOS', writer: '노라', system: 'CoC 7th', links: ['https://example.com/cosmos', 'https://example.com/cosmos-log'], image: null, date: '2026-03-03', role: 'pl,HO1', pair: '', folder: 'CoC 타이만', memo: '', created_at: now - 86_400 * 200 },
@@ -159,7 +159,7 @@ export function installMock() {
     { id: 2008, kind: 'rulebook', title: 'Delta Green', writer: 'Arc Dream', system: 'Delta Green', links: [], image: null, date: null, role: '', pair: '', folder: '', memo: '', created_at: now - 86_400 * 70 },
     { id: 2009, kind: 'wishlist', title: '달빛 아래', writer: '노라', system: 'CoC 7th', links: [], image: null, date: null, role: '', pair: '', folder: '', memo: '', created_at: now - 86_400 * 3 },
     { id: 2004, kind: 'wishlist', title: 'Masks of Nyarlathotep', writer: 'Larry DiTillio', system: 'CoC 7th', links: ['https://example.com/masks'], image: null, date: null, role: '', pair: '', folder: '', memo: 'Long campaign', created_at: now - 86_400 * 10 },
-  ];
+  ] as Omit<TrpgEntry, 'position'>[]).map((e) => ({ ...e, position: 0 }));
   const book = (id: number, title: string, author: string, status: Book['status'], extra: Partial<Book> = {}): Book => ({
     id, title, author, publisher: '', status, image: null, total_pages: 0, current_page: 0, rating: 0,
     started: null, finished: null, review: '', created_at: now - 86_400 * (100 - id + 3000), ...extra,
@@ -338,8 +338,10 @@ export function installMock() {
       case 'trpg_entries': return [...trpg].sort((x, y) => x.kind.localeCompare(y.kind) || (y.date ?? '').localeCompare(x.date ?? '') || y.created_at - x.created_at);
       case 'save_trpg_entry': {
         if (a.entry.id) { Object.assign(trpg.find((e) => e.id === a.entry.id)!, a.entry); return a.entry.id; }
-        trpg.push({ ...a.entry, id: nextId, created_at: a.entry.created_at || now }); return nextId++;
+        const last = Math.max(0, ...trpg.filter((e) => e.kind === a.entry.kind).map((e) => e.position));
+        trpg.push({ ...a.entry, id: nextId, created_at: a.entry.created_at || now, position: last + 1 }); return nextId++;
       }
+      case 'reorder_trpg_entries': (a.ids as number[]).forEach((id, i) => { const e = trpg.find((x) => x.id === id); if (e) e.position = i; }); return null;
       case 'delete_trpg_entry': { const i = trpg.findIndex((e) => e.id === a.id); return i < 0 ? null : trpg.splice(i, 1)[0]; }
       case 'books': return [...books].sort((x, y) => y.created_at - x.created_at);
       case 'save_book': {

@@ -413,6 +413,11 @@ pub fn save_trpg_entry(state: State<AppState>, entry: TrpgEntry) -> CmdResult<i6
 }
 
 #[tauri::command]
+pub fn reorder_trpg_entries(state: State<AppState>, ids: Vec<i64>) -> CmdResult<()> {
+    with_db(&state, |db| db.reorder_trpg_entries(&ids))
+}
+
+#[tauri::command]
 pub fn delete_trpg_entry(state: State<AppState>, id: i64) -> CmdResult<Option<TrpgEntry>> {
     with_db(&state, |db| db.delete_trpg_entry(id))
 }

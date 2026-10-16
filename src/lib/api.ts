@@ -176,6 +176,8 @@ export interface TrpgEntry {
   folder: string;
   memo: string;
   created_at: number;
+  /** Place in the custom (dragged) order of its list; ties are shown A–Z. */
+  position: number;
 }
 
 export type BookStatus = 'want' | 'reading' | 'read';
@@ -336,6 +338,7 @@ export const api = {
   trpgEntries: () => invoke<TrpgEntry[]>('trpg_entries'),
   saveTrpgEntry: (entry: TrpgEntry) => invoke<number>('save_trpg_entry', { entry }),
   deleteTrpgEntry: (id: number) => invoke<TrpgEntry | null>('delete_trpg_entry', { id }),
+  reorderTrpgEntries: (ids: number[]) => invoke<void>('reorder_trpg_entries', { ids }),
 
   books: () => invoke<Book[]>('books'),
   saveBook: (book: Book) => invoke<number>('save_book', { book }),

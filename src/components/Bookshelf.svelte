@@ -1,6 +1,7 @@
 <script lang="ts" generics="T extends { id: number; title: string; image: string | null }">
   // Books shown either on a shelf (covers standing on planks) or as a plain list.
   // `meta` renders the line under each title (system, author, stars…) in both views.
+  // With `onreorder`, books can be dragged into a new order in either view.
   import type { Snippet } from 'svelte';
   import BookCover from './BookCover.svelte';
 
@@ -12,6 +13,7 @@
     onmenu,
     meta,
     trailing,
+    onreorder,
   }: {
     items: T[];
     view?: 'shelf' | 'list';
@@ -21,13 +23,61 @@
     meta: Snippet<[T]>;
     /** Extra content at the end of a list row (e.g. progress). */
     trailing?: Snippet<[T]>;
+    /** Makes books draggable; called with the ids first to last after a drag changed the order. */
+    onreorder?: (ids: number[]) => void;
   } = $props();
+
+  // While dragging, the books are reordered live so you can see where the dragged one will land.
+  let order = $state<T[] | null>(null);
+  let dragId = $state<number | null>(null);
+  let changed = false;
+  const shown = $derived(order ?? items);
+
+  function dragStart(e: DragEvent, b: T) {
+    if (!onreorder) return;
+    e.dataTransfer?.setData('application/x-nora-book', String(b.id));
+    if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+    dragId = b.id;
+    order = [...items];
+    changed = false;
+  }
+
+  function dragOver(e: DragEvent, target: T) {
+    if (dragId === null || !order) return;
+    e.preventDefault();
+    if (target.id === dragId) return;
+    const from = order.findIndex((b) => b.id === dragId);
+    const to = order.findIndex((b) => b.id === target.id);
+    if (from < 0 || to < 0) return;
+    const next = [...order];
+    next.splice(to, 0, ...next.splice(from, 1));
+    order = next;
+    changed = true;
+  }
+
+  function dragEnd() {
+    if (order && changed) onreorder?.(order.map((b) => b.id));
+    dragId = null;
+    order = null;
+  }
+
+  /** Drag handlers for one book (nothing when the order is fixed). */
+  const draggable = (b: T) =>
+    onreorder
+      ? {
+          draggable: true,
+          ondragstart: (e: DragEvent) => dragStart(e, b),
+          ondragover: (e: DragEvent) => dragOver(e, b),
+          ondrop: (e: DragEvent) => e.preventDefault(),
+          ondragend: dragEnd,
+        }
+      : {};
 </script>
 
 {#if view === 'shelf'}
-  <div class="shelf">
-    {#each items as b (b.id)}
-      <button class="book" onclick={() => onopen(b)} oncontextmenu={(ev) => onmenu?.(ev, b)} title={b.title}>
+  <div class="shelf" class:reorderable={!!onreorder}>
+    {#each shown as b (b.id)}
+      <button class="book" class:dragging={dragId === b.id} onclick={() => onopen(b)} oncontextmenu={(ev) => onmenu?.(ev, b)} title={b.title} {...draggable(b)}>
         <BookCover title={b.title} author={author(b)} image={b.image} />
         <span class="caption">
           <span class="caption-title">{b.title}</span>
@@ -37,9 +87,9 @@
     {/each}
   </div>
 {:else}
-  <div class="list">
-    {#each items as b (b.id)}
-      <button class="row" onclick={() => onopen(b)} oncontextmenu={(ev) => onmenu?.(ev, b)}>
+  <div class="list" class:reorderable={!!onreorder}>
+    {#each shown as b (b.id)}
+      <button class="row" class:dragging={dragId === b.id} onclick={() => onopen(b)} oncontextmenu={(ev) => onmenu?.(ev, b)} {...draggable(b)}>
         <span class="thumb"><BookCover title={b.title} image={b.image} small /></span>
         <span class="row-text">
           <span class="row-title truncate">{b.title}</span>
@@ -157,6 +207,15 @@
     display: flex;
     align-items: center;
     gap: 6px;
+  }
+
+  .reorderable .book,
+  .reorderable .row {
+    cursor: grab;
+  }
+  .book.dragging,
+  .row.dragging {
+    opacity: 0.4;
   }
 
   @container main (max-width: 560px) {

@@ -150,7 +150,8 @@ CREATE TABLE IF NOT EXISTS trpg_entries (
     memo       TEXT    NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL,
     pair       TEXT    NOT NULL DEFAULT '',
-    folder     TEXT    NOT NULL DEFAULT ''
+    folder     TEXT    NOT NULL DEFAULT '',
+    position   INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS books (
@@ -558,6 +559,13 @@ fn migrate(conn: &Connection) -> DbResult<()> {
         .exists([])?;
     if !has_trpg_folder {
         conn.execute_batch("ALTER TABLE trpg_entries ADD COLUMN folder TEXT NOT NULL DEFAULT ''")?;
+    }
+    // Custom order for the book shelves. All 0 at first, so the custom order starts out A–Z.
+    let has_trpg_position = conn
+        .prepare("SELECT 1 FROM pragma_table_info('trpg_entries') WHERE name = 'position'")?
+        .exists([])?;
+    if !has_trpg_position {
+        conn.execute_batch("ALTER TABLE trpg_entries ADD COLUMN position INTEGER NOT NULL DEFAULT 0")?;
     }
     let has_tags = conn
         .prepare("SELECT 1 FROM pragma_table_info('events') WHERE name = 'tags'")?

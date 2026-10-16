@@ -2,10 +2,12 @@
   // TRPG log: sessions (want to play / played), rule books and scenario books (shelf or list), and a report.
   import { openUrl } from '@tauri-apps/plugin-opener';
   import {
-    BookOpen, ChartPie, ChevronDown, ExternalLink, Library, Link, Pencil, Plus, ScrollText, Search, Sparkles, Swords, Trash, X,
+    ArrowUpDown, BookOpen, ChartPie, ChevronDown, ExternalLink, GripVertical, Library, Link, Pencil, Plus, ScrollText, Search,
+    Sparkles, Swords, Trash, X,
   } from '@lucide/svelte';
   import Modal from '../components/Modal.svelte';
   import ConfirmButton from '../components/ConfirmButton.svelte';
+  import Select from '../components/Select.svelte';
   import DateField from '../components/DateField.svelte';
   import ImagePicker from '../components/ImagePicker.svelte';
   import TrpgReport from '../components/TrpgReport.svelte';
@@ -22,6 +24,14 @@
 
   type Tab = 'sessions' | 'rulebook' | 'scenario_book' | 'report';
   type Sort = 'date' | 'title';
+  /** How the rule book and scenario book shelves are ordered. */
+  type BookSort = 'name' | 'newest' | 'oldest' | 'custom';
+  const BOOK_SORTS: { value: BookSort; label: Key }[] = [
+    { value: 'name', label: 'trpg.sortName' },
+    { value: 'newest', label: 'trpg.sortNewest' },
+    { value: 'oldest', label: 'trpg.sortOldest' },
+    { value: 'custom', label: 'trpg.sortCustom' },
+  ];
 
   const TABS: { id: Tab; label: Key; icon: typeof BookOpen }[] = [
     { id: 'sessions', label: 'trpg.sessions', icon: ScrollText },
@@ -34,7 +44,7 @@
 
   // Per-viewer conveniences, remembered in this browser only.
   const PREFS_KEY = 'nora.trpg';
-  function readPrefs(): { tab?: Tab; sort?: Sort; collapsed?: string[] } {
+  function readPrefs(): { tab?: Tab; sort?: Sort; bookSort?: BookSort; collapsed?: string[] } {
     try {
       return JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}') ?? {};
     } catch {
@@ -46,6 +56,7 @@
   let entries = $state<TrpgEntry[]>([]);
   let tab = $state<Tab>(TABS.some((x) => x.id === prefs.tab) ? prefs.tab! : 'sessions');
   let sort = $state<Sort>(prefs.sort === 'title' ? 'title' : 'date');
+  let bookSort = $state<BookSort>(BOOK_SORTS.some((s) => s.value === prefs.bookSort) ? prefs.bookSort! : 'name');
   /** Folders folded away, as "<kind>:<folder>". */
   let collapsed = $state<string[]>(Array.isArray(prefs.collapsed) ? prefs.collapsed : []);
   let query = $state('');
@@ -54,7 +65,7 @@
   let error = $state('');
 
   $effect(() => {
-    const value = JSON.stringify({ tab, sort, collapsed });
+    const value = JSON.stringify({ tab, sort, bookSort, collapsed });
     try {
       localStorage.setItem(PREFS_KEY, value);
     } catch {
@@ -98,7 +109,23 @@
       collator.compare,
     ),
   );
-  const books = $derived(tab === 'rulebook' || tab === 'scenario_book' ? of(tab).sort(byTitle) : []);
+  const BOOK_ORDER: Record<BookSort, (a: TrpgEntry, b: TrpgEntry) => number> = {
+    name: byTitle,
+    newest: (a, b) => b.created_at - a.created_at || b.id - a.id,
+    oldest: (a, b) => a.created_at - b.created_at || a.id - b.id,
+    custom: (a, b) => a.position - b.position || byTitle(a, b),
+  };
+  const books = $derived(tab === 'rulebook' || tab === 'scenario_book' ? of(tab).sort(BOOK_ORDER[bookSort]) : []);
+  const bookSortOptions = $derived(BOOK_SORTS.map((s) => ({ value: s.value, label: t(s.label) })));
+  /** Dragging needs the whole list in view, so it is off while searching. */
+  const canReorder = $derived(bookSort === 'custom' && !query.trim());
+
+  /** Saves a dragged order. Shown right away; the database catches up in the background. */
+  function reorderBooks(ids: number[]) {
+    const place = new Map(ids.map((id, i) => [id, i]));
+    entries = entries.map((e) => (place.has(e.id) ? { ...e, position: place.get(e.id)! } : e));
+    api.reorderTrpgEntries(ids).catch((err) => toast(String(err), 'error'));
+  }
   /** Rule systems used so far, offered as suggestions in the editor. */
   const systems = $derived([...new Set(entries.map((e) => e.system).filter(Boolean))].sort(collator.compare));
 
@@ -123,7 +150,7 @@
   function blank(kind: TrpgKind): TrpgEntry {
     return {
       id: 0, kind, title: '', writer: '', system: '', links: [], image: null,
-      date: null, role: '', pair: '', folder: '', memo: '', created_at: 0,
+      date: null, role: '', pair: '', folder: '', memo: '', created_at: 0, position: 0,
     };
   }
 
@@ -257,6 +284,7 @@
         <input class="input" placeholder={t('trpg.search')} bind:value={query} />
       </label>
       {#if tab !== 'sessions'}
+        <div class="book-sort"><Select bind:value={bookSort} options={bookSortOptions} label={t('trpg.bookSort')} icon={ArrowUpDown} /></div>
         <BookViewToggle page="trpg" />
         <button class="btn primary" onclick={() => edit(blank(tab as TrpgKind))}><Plus size={16} /> {t(`trpg.add.${tab as 'rulebook' | 'scenario_book'}`)}</button>
       {/if}
@@ -291,8 +319,18 @@
     <TrpgReport {entries} />
   {:else}
     <div class="card shelf-card">
+      {#if books.length && bookSort === 'custom'}
+        <p class="reorder-hint faint small"><GripVertical size={14} /> {canReorder ? t('trpg.customHint') : t('trpg.customSearchHint')}</p>
+      {/if}
       {#if books.length}
-        <Bookshelf items={books} view={bookViews.trpg} author={(b) => b.writer} onopen={edit} onmenu={entryMenu}>
+        <Bookshelf
+          items={books}
+          view={bookViews.trpg}
+          author={(b) => b.writer}
+          onopen={edit}
+          onmenu={entryMenu}
+          onreorder={canReorder ? reorderBooks : undefined}
+        >
           {#snippet meta(b)}{[b.system, b.writer].filter(Boolean).join(' · ')}{/snippet}
           {#snippet trailing(b)}
             {#if b.links.length}<span class="faint small row-links"><ExternalLink size={13} /> {b.links.length}</span>{/if}
@@ -473,6 +511,16 @@
 {/if}
 
 <style>
+  .book-sort {
+    width: 190px;
+  }
+  .reorder-hint {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    padding: 12px 20px 0;
+  }
   .toolbar {
     display: flex;
     align-items: center;
