@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { pollWhileVisible } from '../lib/poll';
   import Select from '../components/Select.svelte';
   import { onMount } from 'svelte';
   import { slide } from 'svelte/transition';
@@ -39,8 +40,7 @@
 
   onMount(() => {
     load(api.trackerSettings(), null).then((s) => (settings = s));
-    const timer = setInterval(refresh, 3000);
-    return () => clearInterval(timer);
+    return pollWhileVisible(refresh, 3000);
   });
 
   async function saveSettings(next: TrackerSettings) {

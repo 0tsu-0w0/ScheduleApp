@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { pollWhileVisible } from '../lib/poll';
   import { onMount } from 'svelte';
   import { Activity } from '@lucide/svelte';
   import { api, type ActivitySummary, type TrackerStatus } from '../lib/api';
@@ -17,9 +18,7 @@
   }
 
   onMount(() => {
-    refresh();
-    const timer = setInterval(refresh, 15_000);
-    return () => clearInterval(timer);
+    return pollWhileVisible(refresh, 15_000);
   });
 
   const top = $derived(summary?.apps.slice(0, 3) ?? []);

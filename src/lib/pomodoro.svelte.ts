@@ -52,10 +52,8 @@ class Pomodoro {
   private lastSaved = 0;
   /** Saves run one after another, so a session is never inserted twice. */
   private saving: Promise<void> = Promise.resolve();
-
-  constructor() {
-    setInterval(() => this.tick(), 250);
-  }
+  /** Runs only while the timer is running; nothing ticks while it is paused or stopped. */
+  private ticker: ReturnType<typeof setInterval> | undefined;
 
   get running() {
     return this.endsAt !== null;
@@ -96,7 +94,9 @@ class Pomodoro {
       this.runStartedAt = this.lastSaved = Date.now();
     }
     this.started = true;
-    this.endsAt = Date.now() + this.pausedRemaining;
+    this.now = Date.now();
+    this.endsAt = this.now + this.pausedRemaining;
+    this.ticker ??= setInterval(() => this.tick(), 250);
     // Ask once, early, so the end-of-session notification can be shown.
     isPermissionGranted()
       .then((ok) => {
@@ -184,7 +184,11 @@ class Pomodoro {
 
   private tick() {
     this.now = Date.now();
-    if (this.endsAt === null) return;
+    if (this.endsAt === null) {
+      clearInterval(this.ticker);
+      this.ticker = undefined;
+      return;
+    }
     if (this.now < this.endsAt) {
       if (this.phase === 'focus' && this.now - this.lastSaved >= SAVE_EVERY_MS) {
         this.lastSaved = this.now;
@@ -200,6 +204,9 @@ class Pomodoro {
       this.runStartedAt = null;
     }
     this.endsAt = null;
+    // Stop ticking unless auto-start begins the next phase right away.
+    clearInterval(this.ticker);
+    this.ticker = undefined;
     this.advance(true, end);
     const body = wasFocus ? t('pomo.doneFocus') : t('pomo.doneBreak');
     toast(body, 'success');

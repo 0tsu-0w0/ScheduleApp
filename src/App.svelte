@@ -19,24 +19,51 @@
   import { refreshTags } from './lib/tags.svelte';
   import { initReminders } from './lib/reminders';
   import { initGcal } from './lib/gcal.svelte';
+  import { pollWhileVisible } from './lib/poll';
   import { initZoom, stepZoom } from './lib/window.svelte';
   import StickerLayer from './components/StickerLayer.svelte';
   import { loadStickers, setDecorating, stickers } from './lib/stickers.svelte';
   import { loadCalPrefs } from './lib/calPrefs.svelte';
+  import type { Component } from 'svelte';
+  import type { Page } from './lib/state.svelte';
   import Home from './pages/Home.svelte';
-  import Calendar from './pages/Calendar.svelte';
-  import DDays from './pages/DDays.svelte';
-  import Todos from './pages/Todos.svelte';
-  import Pomodoro from './pages/Pomodoro.svelte';
-  import Memos from './pages/Memos.svelte';
-  import Tracking from './pages/Tracking.svelte';
-  import Analytics from './pages/Analytics.svelte';
-  import Bookmarks from './pages/Bookmarks.svelte';
-  import Expenses from './pages/Expenses.svelte';
-  import Health from './pages/Health.svelte';
-  import Trpg from './pages/Trpg.svelte';
-  import Reading from './pages/Reading.svelte';
-  import Settings from './pages/Settings.svelte';
+
+  // Pages other than the overview are loaded the first time they are opened, so startup
+  // only parses the code for the page on screen.
+  const PAGE_LOADERS: Record<Exclude<Page, 'home'>, () => Promise<{ default: Component }>> = {
+    calendar: () => import('./pages/Calendar.svelte'),
+    ddays: () => import('./pages/DDays.svelte'),
+    todos: () => import('./pages/Todos.svelte'),
+    pomodoro: () => import('./pages/Pomodoro.svelte'),
+    memos: () => import('./pages/Memos.svelte'),
+    tracking: () => import('./pages/Tracking.svelte'),
+    analytics: () => import('./pages/Analytics.svelte'),
+    bookmarks: () => import('./pages/Bookmarks.svelte'),
+    expenses: () => import('./pages/Expenses.svelte'),
+    health: () => import('./pages/Health.svelte'),
+    trpg: () => import('./pages/Trpg.svelte'),
+    reading: () => import('./pages/Reading.svelte'),
+    settings: () => import('./pages/Settings.svelte'),
+  };
+  const loadedPages: Partial<Record<Page, Component>> = { home: Home };
+  /** The page on screen; switches once the requested page's code has loaded. */
+  let shown = $state.raw<{ page: Page; view: Component } | null>(ui.page === 'home' ? { page: 'home', view: Home } : null);
+
+  $effect(() => {
+    const page = ui.page;
+    const cached = loadedPages[page];
+    if (cached) {
+      shown = { page, view: cached };
+      return;
+    }
+    PAGE_LOADERS[page as Exclude<Page, 'home'>]()
+      .then((m) => {
+        loadedPages[page] = m.default;
+        // Ignore a page the user already left while it loaded.
+        if (ui.page === page) shown = { page, view: m.default };
+      })
+      .catch((e) => toast(String(e), 'error'));
+  });
 
   /** Sidebar pages in the user's order, without the ones turned off in Settings. */
   const NAV = $derived(visiblePages());
@@ -76,9 +103,7 @@
       });
     }
     const poll = async () => (tracker = await api.trackerStatus().catch(() => null));
-    poll();
-    const timer = setInterval(poll, 2000);
-    return () => clearInterval(timer);
+    return pollWhileVisible(poll, 2000);
   });
 
   // ---- copy & paste of events/todos -------------------------------------------
@@ -280,24 +305,14 @@
 
   <main>
     <div class="drag-top" data-tauri-drag-region></div>
-    {#key ui.page}
-      <div class="page-host" in:fly={{ y: 8, duration: 220 }}>
-        {#if ui.page === 'home'}<Home />
-        {:else if ui.page === 'calendar'}<Calendar />
-        {:else if ui.page === 'ddays'}<DDays />
-        {:else if ui.page === 'todos'}<Todos />
-        {:else if ui.page === 'pomodoro'}<Pomodoro />
-        {:else if ui.page === 'memos'}<Memos />
-        {:else if ui.page === 'tracking'}<Tracking />
-        {:else if ui.page === 'analytics'}<Analytics />
-        {:else if ui.page === 'bookmarks'}<Bookmarks />
-        {:else if ui.page === 'expenses'}<Expenses />
-        {:else if ui.page === 'health'}<Health />
-        {:else if ui.page === 'trpg'}<Trpg />
-        {:else if ui.page === 'reading'}<Reading />
-        {:else}<Settings />{/if}
-      </div>
-    {/key}
+    {#if shown}
+      {#key shown.page}
+        {@const View = shown.view}
+        <div class="page-host" in:fly={{ y: 8, duration: 220 }}>
+          <View />
+        </div>
+      {/key}
+    {/if}
     <StickerLayer page={ui.page} />
   </main>
 
