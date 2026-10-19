@@ -17,7 +17,7 @@ use crate::db::{self, Event};
 
 const CHECK_EVERY: Duration = Duration::from_secs(15);
 /// The longest reminder offered (a week), which bounds how far ahead to look.
-const MAX_REMINDER_DAYS: i64 = 7;
+pub const MAX_REMINDER_DAYS: i64 = 7;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Reminder {
@@ -56,7 +56,13 @@ pub fn start(app: AppHandle, db_path: PathBuf) {
         loop {
             let now = Local::now().naive_local();
             let today = now.date();
-            match db.events_between(today, today + chrono::Duration::days(MAX_REMINDER_DAYS + 1)) {
+            let to = today + chrono::Duration::days(MAX_REMINDER_DAYS + 1);
+            // Imported Google events carry a reminder only when one is chosen in Settings.
+            let all = db.events_between(today, to).and_then(|mut events| {
+                events.extend(db.gcal_events_between(today, to)?.into_iter().map(|item| item.event));
+                Ok(events)
+            });
+            match all {
                 Ok(events) => {
                     for reminder in due(events, now, &mut fired) {
                         // Only the main window handles reminders (it exists even while hidden), so the

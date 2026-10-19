@@ -69,13 +69,19 @@ export interface GcalCalendar {
   selected: boolean;
   /** Shown on the calendar. */
   visible: boolean;
+  /** The calendar's default pop-up reminder in Google, in minutes. */
+  default_reminder?: number | null;
 }
+
+export type GcalReminder = 'off' | 'google' | { before: number };
 
 export interface GcalStatus {
   client_id: string;
   account: string | null;
   calendars: GcalCalendar[];
   interval_min: number;
+  /** Reminders for imported events: none, Google's own, or a fixed time before. */
+  reminder: GcalReminder;
   /** Unix seconds of the last successful sync. */
   last_sync: number | null;
   last_error: string | null;
@@ -237,6 +243,25 @@ export interface Book {
   created_at: number;
 }
 
+/** Automatic backups (see src-tauri/src/autobackup.rs). */
+export interface AutoBackupConfig {
+  enabled: boolean;
+  /** Folder the backups go to; empty until chosen. */
+  dir: string;
+  /** 1 = daily, 7 = weekly. */
+  interval_days: number;
+  /** How many automatic backups to keep. */
+  keep: number;
+}
+
+export interface AutoBackupStatus {
+  config: AutoBackupConfig;
+  last_run: number | null;
+  last_file: string | null;
+  last_error: string | null;
+  last_failure: number | null;
+}
+
 export interface BackupManifest {
   format: number;
   app_version: string;
@@ -309,6 +334,10 @@ export const api = {
   getSetting: (key: string) => invoke<string | null>('get_setting', { key }),
 
   exportData: (path: string) => invoke<BackupManifest>('export_data', { path }),
+  autoBackupStatus: () => invoke<AutoBackupStatus>('autobackup_status'),
+  autoBackupUpdate: (config: AutoBackupConfig) => invoke<AutoBackupStatus>('autobackup_update', { config }),
+  /** Backs up into the chosen folder now; a failure is reported in `last_error`. */
+  autoBackupRunNow: () => invoke<AutoBackupStatus>('autobackup_run_now'),
   inspectBackup: (path: string) => invoke<BackupManifest>('inspect_backup', { path }),
   /** Replaces all data with the backup and restarts the app (does not return on success). */
   importData: (path: string) => invoke<void>('import_data', { path }),
@@ -330,8 +359,8 @@ export const api = {
   /** Fetches the selected calendars; failures are reported in `last_error`, not thrown. */
   gcalSync: () => invoke<GcalStatus>('gcal_sync'),
   gcalRefreshCalendars: () => invoke<GcalStatus>('gcal_refresh_calendars'),
-  gcalUpdate: (calendars: GcalCalendar[], intervalMin: number) =>
-    invoke<GcalStatus>('gcal_update', { calendars, intervalMin }),
+  gcalUpdate: (calendars: GcalCalendar[], intervalMin: number, reminder?: GcalReminder) =>
+    invoke<GcalStatus>('gcal_update', { calendars, intervalMin, reminder: reminder ?? null }),
 
   tags: () => invoke<Tag[]>('tags'),
   /** Creates (id 0) or updates a tag; returns its id. */

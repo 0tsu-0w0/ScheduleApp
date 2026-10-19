@@ -2,11 +2,12 @@
   // Settings → Google Calendar: connect an account, pick calendars, sync (FR-12.1–12.6).
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { CalendarSync, ExternalLink, LoaderCircle, RefreshCw, TriangleAlert, Unplug } from '@lucide/svelte';
-  import { api, type GcalCalendar } from '../lib/api';
+  import { api, type GcalCalendar, type GcalReminder } from '../lib/api';
   import { hex } from '../lib/colors';
   import { fmtTs } from '../lib/dates';
   import { gcal, INTERVALS, setGcalStatus, syncGcal } from '../lib/gcal.svelte';
   import { t } from '../lib/i18n.svelte';
+  import { reminderLabel } from '../lib/reminders';
   import { toast } from '../lib/state.svelte';
 
   const CONSOLE_URL = 'https://console.cloud.google.com/apis/credentials';
@@ -52,6 +53,22 @@
 
   function update(calendars: GcalCalendar[], interval: number) {
     void act(() => api.gcalUpdate(calendars, interval));
+  }
+
+  /** Reminder choices for imported events (issue #1). */
+  const REMINDERS: { value: GcalReminder; label: () => string }[] = [
+    { value: 'off', label: () => t('remind.none') },
+    { value: 'google', label: () => t('gcal.reminderGoogle') },
+    ...[5, 10, 30, 60].map((n) => ({ value: { before: n }, label: () => reminderLabel(n) })),
+  ];
+  const sameReminder = (a: GcalReminder, b: GcalReminder) => JSON.stringify(a) === JSON.stringify(b);
+
+  function setReminder(value: GcalReminder) {
+    if (!status) return;
+    void act(() => api.gcalUpdate(status.calendars, status.interval_min, value)).then(() => {
+      // Google's own reminder times arrive with the next sync.
+      if (value === 'google') void syncGcal();
+    });
   }
 
   function toggle(c: GcalCalendar, field: 'selected' | 'visible', on: boolean) {
@@ -103,6 +120,18 @@
           <button class:active={status.interval_min === n} onclick={() => update(status.calendars, n)}>
             {n < 60 ? t('gcal.minutes', { n }) : t('gcal.hours', { n: n / 60 })}
           </button>
+        {/each}
+      </div>
+    </div>
+
+    <div class="row">
+      <span class="grow">
+        <span class="strong">{t('gcal.reminder')}</span><br />
+        <span class="small muted">{t('gcal.reminderBody')}</span>
+      </span>
+      <div class="segmented wrap">
+        {#each REMINDERS as r (JSON.stringify(r.value))}
+          <button class:active={sameReminder(status.reminder ?? 'off', r.value)} onclick={() => setReminder(r.value)} disabled={busy}>{r.label()}</button>
         {/each}
       </div>
     </div>
@@ -202,6 +231,9 @@
     border-radius: 4px;
     background: var(--c);
     flex: none;
+  }
+  .segmented.wrap {
+    flex-wrap: wrap;
   }
   .reload {
     margin-top: 6px;

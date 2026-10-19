@@ -10,6 +10,7 @@
   import { broadcastPrefs } from '../lib/sync.svelte';
   import Modal from '../components/Modal.svelte';
   import GoogleCalendarSettings from '../components/GoogleCalendarSettings.svelte';
+  import AutoBackupSettings from '../components/AutoBackupSettings.svelte';
   import { api, type BackupManifest } from '../lib/api';
   import { backupError, exportBackup, pickBackup } from '../lib/backup';
   import { fmtTs } from '../lib/dates';
@@ -498,6 +499,8 @@
         </button>
       </div>
     </section>
+
+    {#if inTauri}<AutoBackupSettings />{/if}
 
     <section class="card danger-zone">
       <div class="section-head">

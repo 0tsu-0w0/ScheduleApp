@@ -603,6 +603,7 @@ impl Db {
         conn.execute_batch(SCHEMA)?;
         conn.execute_batch(crate::gcal::SCHEMA)?;
         migrate(&conn)?;
+        crate::gcal::migrate(&conn)?;
         Ok(Self { conn })
     }
 

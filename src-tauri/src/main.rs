@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod autobackup;
 mod backup;
 mod bookmarks;
 mod commands;
@@ -87,6 +88,7 @@ fn main() {
                 images::collect_garbage(&images_dir, &keep);
             }
             reminders::start(app.handle().clone(), db_path.clone());
+            autobackup::start(dir.clone(), images_dir.clone());
             let tracker = tracker::start(db_path, tracker::TrackerSettings::load(&db));
             app.manage(AppState { db: Mutex::new(db), tracker, images_dir, data_dir: dir });
 
@@ -151,6 +153,9 @@ fn main() {
             gcal::gcal_sync,
             gcal::gcal_refresh_calendars,
             gcal::gcal_update,
+            autobackup::autobackup_status,
+            autobackup::autobackup_update,
+            autobackup::autobackup_run_now,
             commands::tags,
             commands::save_tag,
             commands::delete_tag,

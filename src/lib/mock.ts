@@ -36,9 +36,14 @@ function occurrences(first: string, r: NonNullable<CalEvent['repeat']>, from: st
 
 export function installMock() {
   const t = today();
+  // Automatic backups (see components/AutoBackupSettings.svelte).
+  const autoBackup = {
+    config: { enabled: false, dir: '', interval_days: 1, keep: 7 },
+    last_run: null as number | null, last_file: null as string | null, last_error: null as string | null, last_failure: null as number | null,
+  };
   // Google Calendar import (see lib/gcal.svelte.ts): a connected demo account.
   const gcal = {
-    client_id: 'demo.apps.googleusercontent.com', account: 'you@example.com', interval_min: 30,
+    client_id: 'demo.apps.googleusercontent.com', account: 'you@example.com', interval_min: 30, reminder: 'off' as unknown,
     last_sync: Math.floor(Date.now() / 1000), last_error: null as string | null, connected: true,
     calendars: [
       { id: 'you@example.com', name: 'you@example.com', color: 0x039be5, primary: true, selected: true, visible: true },
@@ -198,11 +203,14 @@ export function installMock() {
   mockWindows('main');
   mockIPC((cmd, a: any) => {
     switch (cmd) {
+      case 'autobackup_status': return { ...autoBackup, config: { ...autoBackup.config } };
+      case 'autobackup_update': autoBackup.config = { ...a.config }; return { ...autoBackup };
+      case 'autobackup_run_now': Object.assign(autoBackup, { last_run: Math.floor(Date.now() / 1000), last_file: `Nora-auto-${t}_090000.nora`, last_error: null }); return { ...autoBackup };
       case 'gcal_status': return { ...gcal };
       case 'gcal_connect': Object.assign(gcal, { connected: true, client_id: a.clientId, last_sync: Math.floor(Date.now() / 1000) }); return { ...gcal };
       case 'gcal_disconnect': Object.assign(gcal, { connected: false, account: null, calendars: [], last_sync: null }); return { ...gcal };
       case 'gcal_sync': case 'gcal_refresh_calendars': gcal.last_sync = Math.floor(Date.now() / 1000); return { ...gcal };
-      case 'gcal_update': gcal.calendars = a.calendars; gcal.interval_min = Math.max(5, a.intervalMin); return { ...gcal };
+      case 'gcal_update': gcal.calendars = a.calendars; gcal.interval_min = Math.max(5, a.intervalMin); if (a.reminder) gcal.reminder = a.reminder; return { ...gcal };
       case 'get_setting': return settings[a.key] ?? null;
       case 'set_setting': settings[a.key] = a.value; return null;
       case 'events_between': {

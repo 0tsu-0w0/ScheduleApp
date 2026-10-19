@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS gcal_events (
     location    TEXT    NOT NULL DEFAULT '',
     memo        TEXT    NOT NULL DEFAULT '',
     url         TEXT    NOT NULL DEFAULT '',
+    reminder    INTEGER,
     stamp       INTEGER NOT NULL,
     UNIQUE(calendar_id, event_id)
 );
@@ -63,6 +64,15 @@ CREATE INDEX IF NOT EXISTS idx_gcal_events_start ON gcal_events(start);
 "#;
 
 type CmdResult<T> = Result<T, String>;
+
+/// Adds columns introduced after the table was first created.
+pub fn migrate(conn: &rusqlite::Connection) -> DbResult<()> {
+    let has_reminder = conn.prepare("SELECT 1 FROM pragma_table_info('gcal_events') WHERE name = 'reminder'")?.exists([])?;
+    if !has_reminder {
+        conn.execute_batch("ALTER TABLE gcal_events ADD COLUMN reminder INTEGER")?;
+    }
+    Ok(())
+}
 
 // ---- config -------------------------------------------------------------------
 
@@ -77,6 +87,21 @@ pub struct GcalCalendar {
     pub selected: bool,
     /// Shown on the Nora calendar (only meaningful when selected).
     pub visible: bool,
+    /// The calendar's default pop-up reminder in Google, in minutes.
+    #[serde(default)]
+    pub default_reminder: Option<i64>,
+}
+
+/// Which reminders imported events get (issue #1). Off until the user picks one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GcalReminder {
+    #[default]
+    Off,
+    /// The pop-up reminder set on the event in Google (or the calendar's default).
+    Google,
+    /// The same number of minutes before every imported event.
+    Before(i64),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -88,6 +113,7 @@ pub struct GcalConfig {
     pub account: Option<String>,
     pub calendars: Vec<GcalCalendar>,
     pub interval_min: u32,
+    pub reminder: GcalReminder,
     /// Unix seconds of the last successful sync.
     pub last_sync: Option<i64>,
     /// Message of the last failed sync, cleared on success.
@@ -96,7 +122,15 @@ pub struct GcalConfig {
 
 impl Default for GcalConfig {
     fn default() -> Self {
-        Self { client_id: String::new(), account: None, calendars: vec![], interval_min: DEFAULT_INTERVAL_MIN, last_sync: None, last_error: None }
+        Self {
+            client_id: String::new(),
+            account: None,
+            calendars: vec![],
+            interval_min: DEFAULT_INTERVAL_MIN,
+            reminder: GcalReminder::Off,
+            last_sync: None,
+            last_error: None,
+        }
     }
 }
 
@@ -151,7 +185,7 @@ impl Db {
         let lo = from.and_hms_opt(0, 0, 0).unwrap().format(DT_FMT).to_string();
         let hi = (to + Duration::days(1)).and_hms_opt(0, 0, 0).unwrap().format(DT_FMT).to_string();
         let mut st = self.conn.prepare(
-            "SELECT id, calendar_id, title, start, end, all_day, location, memo, url FROM gcal_events
+            "SELECT id, calendar_id, title, start, end, all_day, location, memo, url, reminder FROM gcal_events
              WHERE start < ?1 AND end >= ?2 ORDER BY all_day DESC, start",
         )?;
         let rows = st.query_map([hi, lo], |r: &Row| {
@@ -165,11 +199,12 @@ impl Db {
                 r.get::<_, String>(6)?,
                 r.get::<_, String>(7)?,
                 r.get::<_, String>(8)?,
+                r.get::<_, Option<i64>>(9)?,
             ))
         })?;
         let mut out = vec![];
         for row in rows {
-            let (id, cal, title, start, end, all_day, location, memo, url) = row?;
+            let (id, cal, title, start, end, all_day, location, memo, url, google_reminder) = row?;
             let Some(c) = shown.iter().find(|c| c.id == cal) else { continue };
             let (Ok(start), Ok(end)) = (NaiveDateTime::parse_from_str(&start, DT_FMT), NaiveDateTime::parse_from_str(&end, DT_FMT)) else {
                 continue;
@@ -189,7 +224,11 @@ impl Db {
                 occurrence: None,
                 cancelled: false,
                 tags: vec![],
-                reminder: None,
+                reminder: match config.reminder {
+                    GcalReminder::Off => None,
+                    GcalReminder::Google => google_reminder,
+                    GcalReminder::Before(minutes) => Some(minutes),
+                },
             };
             let (a, b) = event.date_span();
             if a <= to && b >= from {
@@ -209,14 +248,14 @@ impl Db {
         let stamp: i64 = tx.query_row("SELECT COALESCE(MAX(stamp), 0) + 1 FROM gcal_events", [], |r| r.get(0))?;
         for e in events {
             tx.execute(
-                "INSERT INTO gcal_events(calendar_id, event_id, title, start, end, all_day, location, memo, url, stamp)
-                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                "INSERT INTO gcal_events(calendar_id, event_id, title, start, end, all_day, location, memo, url, reminder, stamp)
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                  ON CONFLICT(calendar_id, event_id) DO UPDATE SET title=excluded.title, start=excluded.start,
                  end=excluded.end, all_day=excluded.all_day, location=excluded.location, memo=excluded.memo,
-                 url=excluded.url, stamp=excluded.stamp",
+                 url=excluded.url, reminder=excluded.reminder, stamp=excluded.stamp",
                 params![
                     calendar_id, e.event_id, e.title, e.start.format(DT_FMT).to_string(), e.end.format(DT_FMT).to_string(),
-                    e.all_day, e.location, e.memo, e.url, stamp
+                    e.all_day, e.location, e.memo, e.url, e.reminder, stamp
                 ],
             )?;
         }
@@ -361,6 +400,7 @@ fn fetch_calendars(token: &str, previous: &[GcalCalendar]) -> CmdResult<Vec<Gcal
                 // New calendars: import only the primary one until the user picks more.
                 selected: old.map_or(primary, |c| c.selected),
                 visible: old.is_none_or(|c| c.visible),
+                default_reminder: popup_minutes(&item["defaultReminders"]),
                 id,
             });
         }
@@ -385,6 +425,13 @@ struct Imported {
     location: String,
     memo: String,
     url: String,
+    /// Pop-up reminder in Google, in minutes before the start.
+    reminder: Option<i64>,
+}
+
+/// The earliest pop-up reminder in a Google reminder list (`[{method, minutes}]`).
+fn popup_minutes(list: &serde_json::Value) -> Option<i64> {
+    list.as_array()?.iter().filter(|r| r["method"].as_str() == Some("popup")).filter_map(|r| r["minutes"].as_i64()).max()
 }
 
 fn parse_when(v: &serde_json::Value) -> Option<(NaiveDateTime, bool)> {
@@ -396,7 +443,8 @@ fn parse_when(v: &serde_json::Value) -> Option<(NaiveDateTime, bool)> {
     Some((date.and_hms_opt(0, 0, 0)?, true))
 }
 
-fn convert(item: &serde_json::Value) -> Option<Imported> {
+/// Converts one Google event; `calendar_reminder` is the calendar's default pop-up reminder.
+fn convert(item: &serde_json::Value, calendar_reminder: Option<i64>) -> Option<Imported> {
     if item["status"].as_str() == Some("cancelled") {
         return None;
     }
@@ -413,10 +461,16 @@ fn convert(item: &serde_json::Value) -> Option<Imported> {
         location: item["location"].as_str().unwrap_or_default().to_owned(),
         memo: item["description"].as_str().unwrap_or_default().to_owned(),
         url: item["htmlLink"].as_str().unwrap_or_default().to_owned(),
+        reminder: if item["reminders"]["useDefault"].as_bool().unwrap_or(true) {
+            calendar_reminder
+        } else {
+            popup_minutes(&item["reminders"]["overrides"])
+        },
     })
 }
 
-fn fetch_events(token: &str, calendar_id: &str) -> CmdResult<Vec<Imported>> {
+fn fetch_events(token: &str, calendar: &GcalCalendar) -> CmdResult<Vec<Imported>> {
+    let calendar_id = calendar.id.as_str();
     let now = Local::now();
     let time_min = (now - Duration::days(PAST_DAYS)).to_rfc3339();
     let time_max = (now + Duration::days(FUTURE_DAYS)).to_rfc3339();
@@ -435,7 +489,7 @@ fn fetch_events(token: &str, calendar_id: &str) -> CmdResult<Vec<Imported>> {
             query.push(("pageToken", p));
         }
         let json = get_json(token, &url, &query)?;
-        out.extend(json["items"].as_array().into_iter().flatten().filter_map(convert));
+        out.extend(json["items"].as_array().into_iter().flatten().filter_map(|item| convert(item, calendar.default_reminder)));
         match json["nextPageToken"].as_str() {
             Some(p) => page = Some(p.to_owned()),
             None => break,
@@ -563,7 +617,7 @@ fn sync_now(app: &AppHandle) -> CmdResult<GcalStatus> {
     let config = with_db(app, |db| db.gcal_config())?;
     let result = (|| -> CmdResult<Vec<(String, Vec<Imported>)>> {
         let token = access_token(&config.client_id)?;
-        config.calendars.iter().filter(|c| c.selected).map(|c| Ok((c.id.clone(), fetch_events(&token, &c.id)?))).collect()
+        config.calendars.iter().filter(|c| c.selected).map(|c| Ok((c.id.clone(), fetch_events(&token, c)?))).collect()
     })();
     with_db(app, |db| {
         let mut config = db.gcal_config();
@@ -668,7 +722,7 @@ pub async fn gcal_refresh_calendars(app: AppHandle) -> CmdResult<GcalStatus> {
 
 /// Saves which calendars are imported/shown and the auto-refresh interval.
 #[tauri::command]
-pub fn gcal_update(app: AppHandle, calendars: Vec<GcalCalendar>, interval_min: u32) -> CmdResult<GcalStatus> {
+pub fn gcal_update(app: AppHandle, calendars: Vec<GcalCalendar>, interval_min: u32, reminder: Option<GcalReminder>) -> CmdResult<GcalStatus> {
     with_db(&app, |db| {
         let mut config = db.gcal_config();
         for c in &mut config.calendars {
@@ -678,6 +732,12 @@ pub fn gcal_update(app: AppHandle, calendars: Vec<GcalCalendar>, interval_min: u
             }
         }
         config.interval_min = interval_min.max(MIN_INTERVAL_MIN);
+        if let Some(r) = reminder {
+            config.reminder = match r {
+                GcalReminder::Before(m) => GcalReminder::Before(m.clamp(0, crate::reminders::MAX_REMINDER_DAYS * 24 * 60)),
+                other => other,
+            };
+        }
         let keep: Vec<String> = config.calendars.iter().filter(|c| c.selected).map(|c| c.id.clone()).collect();
         db.set_gcal_config(&config).map_err(|e| e.to_string())?;
         db.gcal_prune(&keep).map_err(|e| e.to_string())?;
@@ -698,7 +758,7 @@ mod tests {
     fn all_day_end_becomes_last_day() {
         let e = convert(&json!({
             "id": "a", "summary": "Trip", "start": {"date": "2026-10-07"}, "end": {"date": "2026-10-10"}
-        }))
+        }), None)
         .unwrap();
         assert!(e.all_day);
         assert_eq!(e.start, dt("2026-10-07 00:00"));
@@ -709,7 +769,7 @@ mod tests {
     fn timed_event_is_converted_to_local_time() {
         let e = convert(&json!({
             "id": "b", "start": {"dateTime": "2026-10-07T09:00:00Z"}, "end": {"dateTime": "2026-10-07T10:30:00Z"}
-        }))
+        }), None)
         .unwrap();
         assert!(!e.all_day);
         assert_eq!(e.title, "(No title)");
@@ -720,8 +780,8 @@ mod tests {
 
     #[test]
     fn cancelled_and_malformed_items_are_skipped() {
-        assert!(convert(&json!({"id": "c", "status": "cancelled", "start": {"date": "2026-10-07"}, "end": {"date": "2026-10-08"}})).is_none());
-        assert!(convert(&json!({"id": "d"})).is_none());
+        assert!(convert(&json!({"id": "c", "status": "cancelled", "start": {"date": "2026-10-07"}, "end": {"date": "2026-10-08"}}), None).is_none());
+        assert!(convert(&json!({"id": "d"}), None).is_none());
     }
 
     #[test]
@@ -738,9 +798,18 @@ mod tests {
             location: String::new(),
             memo: String::new(),
             url: String::new(),
+            reminder: Some(15),
         };
         db.set_gcal_config(&GcalConfig {
-            calendars: vec![GcalCalendar { id: "cal".into(), name: "Work".into(), color: 0x123456, primary: true, selected: true, visible: true }],
+            calendars: vec![GcalCalendar {
+                id: "cal".into(),
+                name: "Work".into(),
+                color: 0x123456,
+                primary: true,
+                selected: true,
+                visible: true,
+                default_reminder: None,
+            }],
             ..Default::default()
         })
         .unwrap();
@@ -765,6 +834,53 @@ mod tests {
         db.gcal_prune(&[]).unwrap();
         let n: i64 = db.conn.query_row("SELECT COUNT(*) FROM gcal_events", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0);
+        drop(db);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn reminders_follow_the_event_or_the_calendar_default() {
+        let base = json!({"id": "r", "start": {"date": "2026-10-07"}, "end": {"date": "2026-10-08"}});
+        // useDefault (or no reminders field) falls back to the calendar's default.
+        assert_eq!(convert(&base, Some(30)).unwrap().reminder, Some(30));
+        let mut own = base.clone();
+        own["reminders"] = json!({"useDefault": false, "overrides": [
+            {"method": "email", "minutes": 1440}, {"method": "popup", "minutes": 10}, {"method": "popup", "minutes": 60}
+        ]});
+        // Only pop-ups count; the earliest one wins.
+        assert_eq!(convert(&own, Some(30)).unwrap().reminder, Some(60));
+        own["reminders"] = json!({"useDefault": false});
+        assert_eq!(convert(&own, Some(30)).unwrap().reminder, None);
+    }
+
+    #[test]
+    fn reminder_mode_decides_what_imported_events_carry() {
+        let path = std::env::temp_dir().join(format!("nora-gcal-remind-{}.sqlite", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let db = Db::open(&path).unwrap();
+        let d = |s: &str| NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
+        let mut config = GcalConfig {
+            calendars: vec![GcalCalendar { id: "cal".into(), selected: true, visible: true, ..Default::default() }],
+            ..Default::default()
+        };
+        let ev = Imported {
+            event_id: "x".into(),
+            title: "x".into(),
+            start: dt("2026-10-07 09:00"),
+            end: dt("2026-10-07 10:00"),
+            all_day: false,
+            location: String::new(),
+            memo: String::new(),
+            url: String::new(),
+            reminder: Some(15),
+        };
+        db.gcal_store("cal", &[ev]).unwrap();
+        let reminder = |db: &Db| db.gcal_events_between(d("2026-10-07"), d("2026-10-07")).unwrap()[0].event.reminder;
+        for (mode, want) in [(GcalReminder::Off, None), (GcalReminder::Google, Some(15)), (GcalReminder::Before(5), Some(5))] {
+            config.reminder = mode;
+            db.set_gcal_config(&config).unwrap();
+            assert_eq!(reminder(&db), want);
+        }
         drop(db);
         let _ = std::fs::remove_file(path);
     }
