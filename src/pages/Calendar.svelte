@@ -168,6 +168,7 @@
         <button
           class="agenda-item event-block"
           class:cancelled={e.cancelled}
+          class:external={!!e.external}
           style:--c={hex(eventColor(e))}
           style:--on-c={textOn(eventColor(e))}
           onclick={() => (editing = e)}

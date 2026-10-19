@@ -18,6 +18,7 @@
   import EventHoverCard from './components/EventHoverCard.svelte';
   import { refreshTags } from './lib/tags.svelte';
   import { initReminders } from './lib/reminders';
+  import { initGcal } from './lib/gcal.svelte';
   import { initZoom, stepZoom } from './lib/window.svelte';
   import StickerLayer from './components/StickerLayer.svelte';
   import { loadStickers, setDecorating, stickers } from './lib/stickers.svelte';
@@ -59,6 +60,7 @@
     loadStickers();
     loadCalPrefs();
     initReminders();
+    initGcal();
     // Changes made in the overlay panel reload here, and its links open pages here.
     initSync(data, refreshTags, () => {
       initTheme();

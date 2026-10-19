@@ -9,6 +9,7 @@
   import { WIDGETS, type WidgetId } from '../lib/home.svelte';
   import { broadcastPrefs } from '../lib/sync.svelte';
   import Modal from '../components/Modal.svelte';
+  import GoogleCalendarSettings from '../components/GoogleCalendarSettings.svelte';
   import { api, type BackupManifest } from '../lib/api';
   import { backupError, exportBackup, pickBackup } from '../lib/backup';
   import { fmtTs } from '../lib/dates';
@@ -302,6 +303,8 @@
         </div>
       </div>
     </section>
+
+    {#if inTauri}<GoogleCalendarSettings />{/if}
 
     {#if panel}
       <section class="card">

@@ -3,7 +3,8 @@
 // Items are copied to an in-app clipboard (and as plain text to the system clipboard, so
 // they can be pasted into other apps). Whatever the mouse is over decides what is copied
 // and where a paste lands; each page also registers a fallback paste target.
-import { CircleCheck, ClipboardPaste, Copy, CopyPlus, Pencil, RotateCcw, Trash } from '@lucide/svelte';
+import { CircleCheck, ClipboardPaste, Copy, CopyPlus, ExternalLink, Pencil, RotateCcw, Trash } from '@lucide/svelte';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import { api, type CalEvent, type Todo } from './api';
 import { DEFAULT_COLOR } from './colors';
 import { addDays, addMinutes, dateOf, diffDays, pad, timeOf, toDateTime } from './dates';
@@ -49,7 +50,8 @@ function writeSystemClipboard(text: string) {
 // ---- copying -----------------------------------------------------------------
 
 export function copyEvent(e: CalEvent) {
-  clipboard.item = { kind: 'event', event: JSON.parse(JSON.stringify(e)) };
+  // A pasted copy of an imported event becomes an ordinary Nora event.
+  clipboard.item = { kind: 'event', event: JSON.parse(JSON.stringify({ ...e, external: null })) };
   const when = e.all_day ? dateOf(e.start) : `${dateOf(e.start)} ${timeOf(e.start)}–${timeOf(e.end)}`;
   writeSystemClipboard([`${e.title} (${when})`, e.location, ...e.links, e.memo].filter(Boolean).join('\n'));
   toast(t('clip.copied', { name: e.title }));
@@ -239,6 +241,17 @@ export async function deleteTodoWithUndo(tree: TodoTree) {
 // ---- menus ------------------------------------------------------------------
 
 export function eventMenu(e: CalEvent, onEdit: () => void): MenuItem[] {
+  // Imported from Google Calendar: read-only, but can be copied into Nora.
+  if (e.external) {
+    const url = e.external.url;
+    return [
+      { label: t('gcal.details'), icon: Pencil, action: onEdit },
+      { label: t('gcal.openInGoogle'), icon: ExternalLink, disabled: !url, action: () => openUrl(url) },
+      'separator',
+      { label: t('menu.copy'), icon: Copy, shortcut: shortcut('C'), action: () => copyEvent(e) },
+      { label: t('gcal.duplicateToNora'), icon: CopyPlus, action: () => duplicateEvent({ ...e, external: null }) },
+    ];
+  }
   return [
     { label: t('menu.edit'), icon: Pencil, action: onEdit },
     { label: t('menu.copy'), icon: Copy, shortcut: shortcut('C'), action: () => copyEvent(e) },

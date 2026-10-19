@@ -47,6 +47,40 @@ export interface CalEvent {
   tags: number[];
   /** Remind this many minutes before the start; null for no reminder. */
   reminder: number | null;
+  /** Set on events imported from Google Calendar (negative id, read-only in Nora). */
+  external?: ExternalRef | null;
+}
+
+/** Where an imported event came from (see src-tauri/src/gcal.rs). */
+export interface ExternalRef {
+  source: 'google';
+  calendar_id: string;
+  calendar_name: string;
+  /** Opens the event in Google Calendar; may be empty. */
+  url: string;
+}
+
+export interface GcalCalendar {
+  id: string;
+  name: string;
+  color: number;
+  primary: boolean;
+  /** Imported on sync. */
+  selected: boolean;
+  /** Shown on the calendar. */
+  visible: boolean;
+}
+
+export interface GcalStatus {
+  client_id: string;
+  account: string | null;
+  calendars: GcalCalendar[];
+  interval_min: number;
+  /** Unix seconds of the last successful sync. */
+  last_sync: number | null;
+  last_error: string | null;
+  /** A sign-in is stored on this device (false after restoring a backup elsewhere). */
+  connected: boolean;
 }
 
 /** A user-defined label for events, optionally grouped under a category. */
@@ -288,6 +322,16 @@ export const api = {
   deleteEvent: (id: number, occurrence: DateStr | null = null, scope: Scope = 'all') =>
     invoke<CalEvent | null>('delete_event', { id, occurrence, scope }),
   restoreOccurrence: (id: number, day: DateStr) => invoke<void>('restore_occurrence', { id, day }),
+
+  gcalStatus: () => invoke<GcalStatus>('gcal_status'),
+  /** Opens Google's consent page in the browser and resolves once the user allowed access. */
+  gcalConnect: (clientId: string, clientSecret: string) => invoke<GcalStatus>('gcal_connect', { clientId, clientSecret }),
+  gcalDisconnect: () => invoke<GcalStatus>('gcal_disconnect'),
+  /** Fetches the selected calendars; failures are reported in `last_error`, not thrown. */
+  gcalSync: () => invoke<GcalStatus>('gcal_sync'),
+  gcalRefreshCalendars: () => invoke<GcalStatus>('gcal_refresh_calendars'),
+  gcalUpdate: (calendars: GcalCalendar[], intervalMin: number) =>
+    invoke<GcalStatus>('gcal_update', { calendars, intervalMin }),
 
   tags: () => invoke<Tag[]>('tags'),
   /** Creates (id 0) or updates a tag; returns its id. */

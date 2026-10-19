@@ -132,7 +132,8 @@
   function grabTimed(ev: PointerEvent, e: CalEvent, day: string, start: number) {
     hideHoverCard();
     ev.stopPropagation();
-    if (ev.button !== 0 || isSecondaryClick(ev)) return;
+    // Imported events are read-only.
+    if (ev.button !== 0 || isSecondaryClick(ev) || e.external) return;
     const col = (ev.currentTarget as HTMLElement).closest('.col');
     if (!col) return;
     const length = Math.max(15, Math.round((new Date(e.end).getTime() - new Date(e.start).getTime()) / 60_000));
@@ -144,7 +145,7 @@
 
   function grabLane(ev: PointerEvent, e: CalEvent) {
     hideHoverCard();
-    if (ev.button !== 0 || isSecondaryClick(ev) || !laneEl) return;
+    if (ev.button !== 0 || isSecondaryClick(ev) || !laneEl || e.external) return;
     const r = laneEl.getBoundingClientRect();
     moving = {
       e, kind: 'lane', x: ev.clientX, y: ev.clientY, active: false, offset: 0, length: 0, day: '', minutes: 0,
@@ -220,6 +221,7 @@
         {@const e = b.e}
         <button
           class="chip event-block"
+          class:external={!!e.external}
           class:cancelled={e.cancelled}
           class:from-prev={b.fromPrev}
           class:to-next={b.toNext}
@@ -272,6 +274,7 @@
             <button
               class="event event-block"
               class:cancelled={t.e.cancelled}
+              class:external={!!t.e.external}
               class:dragged={moving?.active && moving.kind === 'timed' && sameEvent(moving.e, t.e)}
               style:--c={hex(eventColor(t.e))}
               style:--on-c={textOn(eventColor(t.e))}

@@ -3,6 +3,7 @@
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { Bell, CircleCheck, Link, MapPin, Plus, RotateCcw, Trash, X } from '@lucide/svelte';
   import TagManager from '../components/TagManager.svelte';
+  import ExternalEventModal from '../components/ExternalEventModal.svelte';
   import { hex } from '../lib/colors';
   import { MAX_REMINDER_MINUTES, REMINDER_PRESETS, reminderLabel } from '../lib/reminders';
   import { tagStore } from '../lib/tags.svelte';
@@ -137,6 +138,9 @@
   }
 </script>
 
+{#if event.external}
+  <ExternalEventModal {event} {onclose} />
+{:else}
 <Modal title={isNew ? t('event.new') : t('event.edit')} {onclose} width={540}>
   {#if event.cancelled}
     <p class="cancelled-note"><CircleCheck size={15} /> {t('event.cancelledNote')}</p>
@@ -284,6 +288,7 @@
       if (tag && isNew && form.tags.length === 1) form.color = tag.color;
     }}
   />
+{/if}
 {/if}
 
 <style>

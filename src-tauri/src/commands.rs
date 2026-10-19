@@ -9,6 +9,7 @@ use crate::AppState;
 use crate::backup::{self, Manifest};
 use crate::bookmarks::{Bookmark, BookmarkFolder};
 use crate::expenses::Expense;
+use crate::gcal::CalItem;
 use crate::health::{self, Meal, Workout};
 use crate::db::{ActivitySummary, Activity, DDay, Event, Memo, MemoGroup, PomodoroSession, Scope, Tag, Todo, TodoGroup};
 use crate::tracker::{TrackerSettings, TrackerStatus};
@@ -69,13 +70,22 @@ pub fn set_setting(state: State<AppState>, key: String, value: String) -> CmdRes
 
 // ---- events -------------------------------------------------------------------
 
+/// Nora's own events plus events imported from Google Calendar (negative ids, read-only).
 #[tauri::command]
-pub fn events_between(state: State<AppState>, from: NaiveDate, to: NaiveDate) -> CmdResult<Vec<Event>> {
-    with_db(&state, |db| db.events_between(from, to))
+pub fn events_between(state: State<AppState>, from: NaiveDate, to: NaiveDate) -> CmdResult<Vec<CalItem>> {
+    with_db(&state, |db| {
+        let mut out: Vec<CalItem> = db.events_between(from, to)?.into_iter().map(|event| CalItem { event, external: None }).collect();
+        out.extend(db.gcal_events_between(from, to)?);
+        out.sort_by(|a, b| b.event.all_day.cmp(&a.event.all_day).then(a.event.start.cmp(&b.event.start)));
+        Ok(out)
+    })
 }
 
 #[tauri::command]
 pub fn save_event(state: State<AppState>, event: Event, scope: Option<Scope>) -> CmdResult<i64> {
+    if event.id < 0 {
+        return Err("Events imported from Google Calendar can't be changed here.".into());
+    }
     if event.end < event.start {
         return Err("The event must end after it starts.".into());
     }
@@ -85,6 +95,9 @@ pub fn save_event(state: State<AppState>, event: Event, scope: Option<Scope>) ->
 /// Deletes an event (or one occurrence of a repeating event) and returns the stored row for undo.
 #[tauri::command]
 pub fn delete_event(state: State<AppState>, id: i64, occurrence: Option<NaiveDate>, scope: Option<Scope>) -> CmdResult<Option<Event>> {
+    if id < 0 {
+        return Err("Events imported from Google Calendar can't be deleted here.".into());
+    }
     with_db(&state, |db| db.delete_event(id, occurrence, scope.unwrap_or(Scope::All)))
 }
 

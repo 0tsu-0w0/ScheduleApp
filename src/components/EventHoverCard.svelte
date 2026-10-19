@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Bell, MapPin, Repeat } from '@lucide/svelte';
+  import { Bell, CalendarDays, MapPin, Repeat } from '@lucide/svelte';
   import { fade } from 'svelte/transition';
   import type { CalEvent } from '../lib/api';
   import { hex } from '../lib/colors';
@@ -57,6 +57,7 @@
           {when(e)}{#if e.cancelled} · <span class="cancel-label">{t('hover.cancelled')}</span>{/if}
         </div>
         {#if e.location}<div class="meta row"><MapPin size={12} /> <span class="truncate">{e.location}</span></div>{/if}
+        {#if e.external}<div class="meta row"><CalendarDays size={12} /> <span class="truncate">{e.external.calendar_name}</span></div>{/if}
         {#if e.reminder !== null}<div class="meta row"><Bell size={12} /> {reminderLabel(e.reminder)}</div>{/if}
         {#if tags.length}
           <div class="tags">

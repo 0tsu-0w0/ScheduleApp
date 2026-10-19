@@ -36,6 +36,21 @@ function occurrences(first: string, r: NonNullable<CalEvent['repeat']>, from: st
 
 export function installMock() {
   const t = today();
+  // Google Calendar import (see lib/gcal.svelte.ts): a connected demo account.
+  const gcal = {
+    client_id: 'demo.apps.googleusercontent.com', account: 'you@example.com', interval_min: 30,
+    last_sync: Math.floor(Date.now() / 1000), last_error: null as string | null, connected: true,
+    calendars: [
+      { id: 'you@example.com', name: 'you@example.com', color: 0x039be5, primary: true, selected: true, visible: true },
+      { id: 'holidays', name: '日本の祝日', color: 0x0b8043, primary: false, selected: true, visible: true },
+      { id: 'team', name: 'Team', color: 0xe67c73, primary: false, selected: false, visible: true },
+    ],
+  };
+  const gext = (calendar_id: string, calendar_name: string) => ({ source: 'google' as const, calendar_id, calendar_name, url: 'https://calendar.google.com/' });
+  const gcalEvents = (): CalEvent[] => [
+    { id: -1, title: 'Dentist (Google)', start: toDateTime(t, '16:00'), end: toDateTime(t, '17:00'), all_day: false, color: 0x039be5, location: 'Shibuya', links: [], memo: 'Imported from Google', repeat: null, exdates: [], occurrence: null, cancelled: false, tags: [], reminder: null, external: gext('you@example.com', 'you@example.com') },
+    { id: -2, title: 'Holiday', start: toDateTime(addDays(t, 2), '00:00'), end: toDateTime(addDays(t, 2), '00:00'), all_day: true, color: 0x0b8043, location: '', links: [], memo: '', repeat: null, exdates: [], occurrence: null, cancelled: false, tags: [], reminder: null, external: gext('holidays', '日本の祝日') },
+  ];
   const now = Math.floor(Date.now() / 1000);
   let nextId = 100;
   const ev = (title: string, day: number, s: string, e: string, color: number, location = '', allDayEnd?: number): CalEvent => ({
@@ -183,6 +198,11 @@ export function installMock() {
   mockWindows('main');
   mockIPC((cmd, a: any) => {
     switch (cmd) {
+      case 'gcal_status': return { ...gcal };
+      case 'gcal_connect': Object.assign(gcal, { connected: true, client_id: a.clientId, last_sync: Math.floor(Date.now() / 1000) }); return { ...gcal };
+      case 'gcal_disconnect': Object.assign(gcal, { connected: false, account: null, calendars: [], last_sync: null }); return { ...gcal };
+      case 'gcal_sync': case 'gcal_refresh_calendars': gcal.last_sync = Math.floor(Date.now() / 1000); return { ...gcal };
+      case 'gcal_update': gcal.calendars = a.calendars; gcal.interval_min = Math.max(5, a.intervalMin); return { ...gcal };
       case 'get_setting': return settings[a.key] ?? null;
       case 'set_setting': settings[a.key] = a.value; return null;
       case 'events_between': {
@@ -197,6 +217,7 @@ export function installMock() {
             out.push({ ...e, start, end: addMinutes(start, length), occurrence: d });
           }
         }
+        if (gcal.connected) out.push(...gcalEvents().filter((e) => gcal.calendars.some((c) => c.id === e.external!.calendar_id && c.selected && c.visible)));
         return out.filter((e) => { const [x, y] = eventSpan(e); return x <= a.to && y >= a.from; }).sort((x, y) => x.start.localeCompare(y.start));
       }
       case 'save_event': {

@@ -601,6 +601,7 @@ impl Db {
     pub fn open(path: &Path) -> DbResult<Self> {
         let conn = open_conn(path)?;
         conn.execute_batch(SCHEMA)?;
+        conn.execute_batch(crate::gcal::SCHEMA)?;
         migrate(&conn)?;
         Ok(Self { conn })
     }

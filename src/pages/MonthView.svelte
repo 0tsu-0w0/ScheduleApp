@@ -73,7 +73,8 @@
 
   function grab(ev: PointerEvent, e: CalEvent) {
     hideHoverCard();
-    if (ev.button !== 0 || isSecondaryClick(ev)) return;
+    // Imported events are read-only.
+    if (ev.button !== 0 || isSecondaryClick(ev) || e.external) return;
     const day = dayAt(ev.clientX, ev.clientY);
     if (day) moving = { e, grabDay: day, overDay: day, x: ev.clientX, y: ev.clientY, active: false };
   }
@@ -167,6 +168,7 @@
               <button
                 class="chip event-block"
                 class:cancelled={e.cancelled}
+                class:external={!!e.external}
                 class:from-prev={b.fromPrev}
                 class:to-next={b.toNext}
                 class:dragged={moving?.active && moving.e.id === e.id && moving.e.occurrence === e.occurrence}

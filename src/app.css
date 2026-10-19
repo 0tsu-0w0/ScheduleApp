@@ -791,6 +791,12 @@ input[type='time'] {
 .event-block:hover {
   filter: brightness(1.07);
 }
+/* Imported from Google Calendar: tinted with a solid edge, so it reads apart from Nora's own events. */
+.event-block.external {
+  background: color-mix(in srgb, var(--c) 24%, var(--surface));
+  color: var(--text);
+  box-shadow: inset 3px 0 0 var(--c);
+}
 .event-block.cancelled {
   opacity: 0.5;
 }

@@ -5,6 +5,7 @@ mod bookmarks;
 mod commands;
 mod db;
 mod expenses;
+mod gcal;
 mod health;
 mod images;
 mod panel;
@@ -144,6 +145,12 @@ fn main() {
             commands::save_event,
             commands::delete_event,
             commands::restore_occurrence,
+            gcal::gcal_status,
+            gcal::gcal_connect,
+            gcal::gcal_disconnect,
+            gcal::gcal_sync,
+            gcal::gcal_refresh_calendars,
+            gcal::gcal_update,
             commands::tags,
             commands::save_tag,
             commands::delete_tag,
