@@ -11,6 +11,7 @@
   import Modal from '../components/Modal.svelte';
   import GoogleCalendarSettings from '../components/GoogleCalendarSettings.svelte';
   import AutoBackupSettings from '../components/AutoBackupSettings.svelte';
+  import NotionSettings from '../components/NotionSettings.svelte';
   import { api, type BackupManifest } from '../lib/api';
   import { backupError, exportBackup, pickBackup } from '../lib/backup';
   import { fmtTs } from '../lib/dates';
@@ -499,6 +500,8 @@
         </button>
       </div>
     </section>
+
+    {#if inTauri}<NotionSettings />{/if}
 
     {#if inTauri}<AutoBackupSettings />{/if}
 

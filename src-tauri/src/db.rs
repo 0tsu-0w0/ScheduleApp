@@ -605,6 +605,7 @@ impl Db {
         migrate(&conn)?;
         crate::gcal::migrate(&conn)?;
         crate::gsync::migrate(&conn)?;
+        conn.execute_batch(crate::notion::SCHEMA)?;
         Ok(Self { conn })
     }
 

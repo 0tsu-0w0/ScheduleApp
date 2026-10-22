@@ -9,6 +9,7 @@ mod expenses;
 mod gcal;
 mod gsync;
 mod health;
+mod notion;
 mod images;
 mod panel;
 mod reading;
@@ -90,6 +91,7 @@ fn main() {
             }
             reminders::start(app.handle().clone(), db_path.clone());
             autobackup::start(dir.clone(), images_dir.clone());
+            notion::start(dir.clone());
             let tracker = tracker::start(db_path, tracker::TrackerSettings::load(&db));
             app.manage(AppState { db: Mutex::new(db), tracker, images_dir, data_dir: dir });
 
@@ -158,6 +160,13 @@ fn main() {
             autobackup::autobackup_status,
             autobackup::autobackup_update,
             autobackup::autobackup_run_now,
+            notion::notion_status,
+            notion::notion_connect,
+            notion::notion_disconnect,
+            notion::notion_database,
+            notion::notion_set_target,
+            notion::notion_set_auto,
+            notion::notion_export,
             commands::tags,
             commands::save_tag,
             commands::delete_tag,

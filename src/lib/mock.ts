@@ -36,6 +36,18 @@ function occurrences(first: string, r: NonNullable<CalEvent['repeat']>, from: st
 
 export function installMock() {
   const t = today();
+  // Notion export (see components/NotionSettings.svelte).
+  const notion = {
+    config: { targets: {} as Record<string, unknown>, auto: false, workspace: null as string | null },
+    last_run: null as number | null, last_error: null as string | null, last_report: null as unknown, connected: false,
+    fields: [
+      { kind: 'memo', fields: [{ id: 'title', value: 'text' }, { id: 'group', value: 'text' }, { id: 'created', value: 'date' }, { id: 'updated', value: 'date' }] },
+      { kind: 'book', fields: ['title', 'author', 'publisher', 'status'].map((id) => ({ id, value: 'text' })).concat(
+        ['pages', 'current_page', 'progress', 'rating'].map((id) => ({ id, value: 'number' })), ['started', 'finished'].map((id) => ({ id, value: 'date' }))) },
+      { kind: 'trpg', fields: [{ id: 'title', value: 'text' }, { id: 'kind', value: 'text' }, { id: 'writer', value: 'text' }, { id: 'system', value: 'text' },
+        { id: 'date', value: 'date' }, { id: 'roles', value: 'list' }, { id: 'folder', value: 'text' }, { id: 'link', value: 'url' }] },
+    ],
+  };
   // Automatic backups (see components/AutoBackupSettings.svelte).
   const autoBackup = {
     config: { enabled: false, dir: '', interval_days: 1, keep: 7 },
@@ -204,6 +216,13 @@ export function installMock() {
   mockWindows('main');
   mockIPC((cmd, a: any) => {
     switch (cmd) {
+      case 'notion_status': return JSON.parse(JSON.stringify(notion));
+      case 'notion_connect': notion.connected = true; notion.config.workspace = 'My workspace'; return JSON.parse(JSON.stringify(notion));
+      case 'notion_disconnect': notion.connected = false; return JSON.parse(JSON.stringify(notion));
+      case 'notion_database': return { id: '0123456789abcdef0123456789abcdef', title: 'Reading list', properties: { Name: 'title', Author: 'rich_text', Status: 'select', Rating: 'number', Finished: 'date', Tags: 'multi_select' } };
+      case 'notion_set_target': if (a.target) notion.config.targets[a.kind as 'book'] = a.target; else delete notion.config.targets[a.kind as 'book']; return JSON.parse(JSON.stringify(notion));
+      case 'notion_set_auto': notion.config.auto = a.auto; return JSON.parse(JSON.stringify(notion));
+      case 'notion_export': Object.assign(notion, { last_run: Math.floor(Date.now() / 1000), last_error: null, last_report: { created: 3, updated: 1, unchanged: 0, archived: 0, skipped_elements: 1 } }); return JSON.parse(JSON.stringify(notion));
       case 'autobackup_status': return { ...autoBackup, config: { ...autoBackup.config } };
       case 'autobackup_update': autoBackup.config = { ...a.config }; return { ...autoBackup };
       case 'autobackup_run_now': Object.assign(autoBackup, { last_run: Math.floor(Date.now() / 1000), last_file: `Nora-auto-${t}_090000.nora`, last_error: null }); return { ...autoBackup };

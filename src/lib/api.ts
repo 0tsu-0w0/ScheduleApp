@@ -270,6 +270,45 @@ export interface AutoBackupStatus {
   last_failure: number | null;
 }
 
+/** Notion export (see src-tauri/src/notion.rs). */
+export type NotionKind = 'memo' | 'book' | 'trpg';
+
+export interface NotionTarget {
+  database_id: string;
+  database_title: string;
+  /** App field id → Notion property name. */
+  mapping: Record<string, string>;
+  /** Notion property name → type, as read when the mapping was made. */
+  types: Record<string, string>;
+  /** Write the Markdown text as the page's content. */
+  body: boolean;
+}
+
+export interface NotionReport {
+  created: number;
+  updated: number;
+  unchanged: number;
+  archived: number;
+  /** Images, tables and raw HTML that could not be converted. */
+  skipped_elements: number;
+}
+
+export interface NotionStatus {
+  config: { targets: Partial<Record<NotionKind, NotionTarget>>; auto: boolean; workspace: string | null };
+  last_run: number | null;
+  last_error: string | null;
+  last_report: NotionReport | null;
+  connected: boolean;
+  fields: { kind: NotionKind; fields: { id: string; value: 'text' | 'list' | 'number' | 'date' | 'url' }[] }[];
+}
+
+export interface NotionDatabase {
+  id: string;
+  title: string;
+  /** Property name → Notion type. */
+  properties: Record<string, string>;
+}
+
 export interface BackupManifest {
   format: number;
   app_version: string;
@@ -352,6 +391,16 @@ export const api = {
 
   exportData: (path: string) => invoke<BackupManifest>('export_data', { path }),
   autoBackupStatus: () => invoke<AutoBackupStatus>('autobackup_status'),
+  notionStatus: () => invoke<NotionStatus>('notion_status'),
+  /** Checks the integration secret with Notion and stores it in the credential store. */
+  notionConnect: (token: string) => invoke<NotionStatus>('notion_connect', { token }),
+  notionDisconnect: () => invoke<NotionStatus>('notion_disconnect'),
+  /** Reads a database (link or id) so its properties can be mapped. */
+  notionDatabase: (reference: string) => invoke<NotionDatabase>('notion_database', { reference }),
+  notionSetTarget: (kind: NotionKind, target: NotionTarget | null) => invoke<NotionStatus>('notion_set_target', { kind, target }),
+  notionSetAuto: (auto: boolean) => invoke<NotionStatus>('notion_set_auto', { auto }),
+  /** Exports one kind (or all); failures are reported in `last_error`. */
+  notionExport: (kind: NotionKind | null) => invoke<NotionStatus>('notion_export', { kind }),
   autoBackupUpdate: (config: AutoBackupConfig) => invoke<AutoBackupStatus>('autobackup_update', { config }),
   /** Backs up into the chosen folder now; a failure is reported in `last_error`. */
   autoBackupRunNow: () => invoke<AutoBackupStatus>('autobackup_run_now'),
