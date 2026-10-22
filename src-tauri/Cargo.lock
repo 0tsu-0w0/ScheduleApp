@@ -2624,6 +2624,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "getrandom 0.3.4",
+ "iana-time-zone",
  "image",
  "keyring",
  "rusqlite",

@@ -6,6 +6,7 @@
   import { hex } from '../lib/colors';
   import { fmtTs } from '../lib/dates';
   import { gcal, INTERVALS, setGcalStatus, syncGcal } from '../lib/gcal.svelte';
+  import Select from './Select.svelte';
   import { t } from '../lib/i18n.svelte';
   import { reminderLabel } from '../lib/reminders';
   import { toast } from '../lib/state.svelte';
@@ -69,6 +70,30 @@
       // Google's own reminder times arrive with the next sync.
       if (value === 'google') void syncGcal();
     });
+  }
+
+  // ---- two-way sync (issue #4)
+  const syncOptions = $derived([
+    { value: '', label: t('gcal.twoWayOff') },
+    ...(status?.calendars ?? []).filter((c) => c.writable).map((c) => ({ value: c.id, label: c.name, color: hex(c.color) })),
+  ]);
+
+  function setSyncCalendar(id: string) {
+    void act(() => api.gcalSetSyncCalendar(id || null)).then(() => {
+      if (id && gcal.status?.sync_calendar === id) toast(t('gcal.twoWayOn'), 'success');
+    });
+  }
+
+  async function allowWrite() {
+    if (!status) return;
+    connecting = true;
+    try {
+      setGcalStatus(await api.gcalConnect(status.client_id, '', true));
+    } catch (e) {
+      toast(String(e), 'error');
+    } finally {
+      connecting = false;
+    }
   }
 
   function toggle(c: GcalCalendar, field: 'selected' | 'visible', on: boolean) {
@@ -136,6 +161,25 @@
       </div>
     </div>
 
+    <div class="row two-way">
+      <span class="grow">
+        <span class="strong">{t('gcal.twoWay')}</span><br />
+        <span class="small muted">{t('gcal.twoWayBody')}</span>
+        {#if status.sync_calendar && status.sync_unsupported.length}
+          <br /><span class="small muted">{t('gcal.twoWayUnsupported', { n: status.sync_unsupported.length })}</span>
+        {/if}
+      </span>
+      {#if status.can_write}
+        <div class="sync-select">
+          <Select value={status.sync_calendar ?? ''} options={syncOptions} onchange={setSyncCalendar} label={t('gcal.twoWay')} />
+        </div>
+      {:else}
+        <button class="btn small" onclick={allowWrite} disabled={connecting}>
+          {#if connecting}<span class="spin"><LoaderCircle size={15} /></span>{/if} {t('gcal.allowWrite')}
+        </button>
+      {/if}
+    </div>
+
     <div class="cal-head">
       <span class="strong grow">{t('gcal.calendars')}</span>
       <span class="col-label small muted">{t('gcal.import')}</span>
@@ -144,8 +188,8 @@
     {#each status.calendars as c (c.id)}
       <div class="cal">
         <span class="swatch" style:--c={hex(c.color)}></span>
-        <span class="grow truncate">{c.name}</span>
-        <span class="col-label"><input type="checkbox" class="switch" checked={c.selected} disabled={busy} onchange={(e) => toggle(c, 'selected', e.currentTarget.checked)} /></span>
+        <span class="grow truncate">{c.name}{#if status.sync_calendar === c.id}<span class="badge-two-way small">{t('gcal.twoWayBadge')}</span>{/if}</span>
+        <span class="col-label"><input type="checkbox" class="switch" checked={c.selected} disabled={busy || status.sync_calendar === c.id} onchange={(e) => toggle(c, 'selected', e.currentTarget.checked)} /></span>
         <span class="col-label"><input type="checkbox" class="switch" checked={c.visible} disabled={busy || !c.selected} onchange={(e) => toggle(c, 'visible', e.currentTarget.checked)} /></span>
       </div>
     {/each}
@@ -231,6 +275,17 @@
     border-radius: 4px;
     background: var(--c);
     flex: none;
+  }
+  .sync-select {
+    min-width: 220px;
+  }
+  .badge-two-way {
+    margin-left: 6px;
+    padding: 1px 8px;
+    border-radius: 999px;
+    color: var(--primary);
+    background: var(--primary-soft);
+    font-weight: 650;
   }
   .segmented.wrap {
     flex-wrap: wrap;

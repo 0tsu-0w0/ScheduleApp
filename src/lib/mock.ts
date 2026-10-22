@@ -45,8 +45,9 @@ export function installMock() {
   const gcal = {
     client_id: 'demo.apps.googleusercontent.com', account: 'you@example.com', interval_min: 30, reminder: 'off' as unknown,
     last_sync: Math.floor(Date.now() / 1000), last_error: null as string | null, connected: true,
+    can_write: false, sync_calendar: null as string | null, sync_unsupported: [] as string[],
     calendars: [
-      { id: 'you@example.com', name: 'you@example.com', color: 0x039be5, primary: true, selected: true, visible: true },
+      { id: 'you@example.com', name: 'you@example.com', color: 0x039be5, primary: true, selected: true, visible: true, writable: true },
       { id: 'holidays', name: '日本の祝日', color: 0x0b8043, primary: false, selected: true, visible: true },
       { id: 'team', name: 'Team', color: 0xe67c73, primary: false, selected: false, visible: true },
     ],
@@ -207,7 +208,8 @@ export function installMock() {
       case 'autobackup_update': autoBackup.config = { ...a.config }; return { ...autoBackup };
       case 'autobackup_run_now': Object.assign(autoBackup, { last_run: Math.floor(Date.now() / 1000), last_file: `Nora-auto-${t}_090000.nora`, last_error: null }); return { ...autoBackup };
       case 'gcal_status': return { ...gcal };
-      case 'gcal_connect': Object.assign(gcal, { connected: true, client_id: a.clientId, last_sync: Math.floor(Date.now() / 1000) }); return { ...gcal };
+      case 'gcal_connect': Object.assign(gcal, { connected: true, client_id: a.clientId, can_write: gcal.can_write || !!a.write, last_sync: Math.floor(Date.now() / 1000) }); return { ...gcal };
+      case 'gcal_set_sync_calendar': gcal.sync_calendar = a.calendarId; return { ...gcal };
       case 'gcal_disconnect': Object.assign(gcal, { connected: false, account: null, calendars: [], last_sync: null }); return { ...gcal };
       case 'gcal_sync': case 'gcal_refresh_calendars': gcal.last_sync = Math.floor(Date.now() / 1000); return { ...gcal };
       case 'gcal_update': gcal.calendars = a.calendars; gcal.interval_min = Math.max(5, a.intervalMin); if (a.reminder) gcal.reminder = a.reminder; return { ...gcal };

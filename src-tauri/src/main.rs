@@ -7,6 +7,7 @@ mod commands;
 mod db;
 mod expenses;
 mod gcal;
+mod gsync;
 mod health;
 mod images;
 mod panel;
@@ -153,6 +154,7 @@ fn main() {
             gcal::gcal_sync,
             gcal::gcal_refresh_calendars,
             gcal::gcal_update,
+            gcal::gcal_set_sync_calendar,
             autobackup::autobackup_status,
             autobackup::autobackup_update,
             autobackup::autobackup_run_now,

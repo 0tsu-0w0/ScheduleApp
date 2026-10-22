@@ -29,10 +29,12 @@ const KEY_REFRESH: &str = "refresh-token";
 const KEY_SECRET: &str = "client-secret";
 /// Read-only access is all the import needs (NFR-13).
 const SCOPE: &str = "https://www.googleapis.com/auth/calendar.readonly";
+/// Added only when two-way sync is turned on (issue #4).
+const SCOPE_WRITE: &str = "https://www.googleapis.com/auth/calendar.events";
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const REVOKE_URL: &str = "https://oauth2.googleapis.com/revoke";
-const API: &str = "https://www.googleapis.com/calendar/v3";
+pub(crate) const API: &str = "https://www.googleapis.com/calendar/v3";
 /// How long the browser sign-in may take before we give up.
 const SIGN_IN_TIMEOUT: StdDuration = StdDuration::from_secs(300);
 /// Lower bound for the auto-refresh interval, to stay well inside the API quota (NFR-15).
@@ -90,6 +92,9 @@ pub struct GcalCalendar {
     /// The calendar's default pop-up reminder in Google, in minutes.
     #[serde(default)]
     pub default_reminder: Option<i64>,
+    /// The account may add and change events here (owner or writer).
+    #[serde(default)]
+    pub writable: bool,
 }
 
 /// Which reminders imported events get (issue #1). Off until the user picks one.
@@ -114,6 +119,16 @@ pub struct GcalConfig {
     pub calendars: Vec<GcalCalendar>,
     pub interval_min: u32,
     pub reminder: GcalReminder,
+    /// The calendar synced both ways with Nora's own events; `None` = import only.
+    pub sync_calendar: Option<String>,
+    /// Google's token for fetching only what changed since the last two-way sync.
+    pub sync_token: Option<String>,
+    /// Series in the synced calendar that Nora can't represent (shown read-only).
+    pub sync_unsupported: Vec<String>,
+    /// Scopes Google granted at the last sign-in.
+    pub granted_scope: String,
+    /// Makes this installation's Google event ids unique.
+    pub device_tag: String,
     /// Unix seconds of the last successful sync.
     pub last_sync: Option<i64>,
     /// Message of the last failed sync, cleared on success.
@@ -128,6 +143,11 @@ impl Default for GcalConfig {
             calendars: vec![],
             interval_min: DEFAULT_INTERVAL_MIN,
             reminder: GcalReminder::Off,
+            sync_calendar: None,
+            sync_token: None,
+            sync_unsupported: vec![],
+            granted_scope: String::new(),
+            device_tag: String::new(),
             last_sync: None,
             last_error: None,
         }
@@ -141,6 +161,8 @@ pub struct GcalStatus {
     pub config: GcalConfig,
     /// A refresh token is stored on this machine. False after restoring a backup elsewhere.
     pub connected: bool,
+    /// The sign-in allows changing events (needed for two-way sync).
+    pub can_write: bool,
 }
 
 /// Marks an event that came from Google (read-only in Nora).
@@ -171,7 +193,9 @@ impl Db {
     }
 
     fn gcal_status(&self) -> GcalStatus {
-        GcalStatus { config: self.gcal_config(), connected: secret(KEY_REFRESH).is_some() }
+        let config = self.gcal_config();
+        let can_write = config.granted_scope.split_whitespace().any(|s| s == SCOPE_WRITE || s.ends_with("/auth/calendar"));
+        GcalStatus { config, connected: secret(KEY_REFRESH).is_some(), can_write }
     }
 
     /// Imported events of visible calendars touching `from..=to`. Ids are negative so they
@@ -296,7 +320,7 @@ fn forget_secret(key: &str) {
 
 // ---- HTTP -----------------------------------------------------------------------
 
-fn agent() -> ureq::Agent {
+pub(crate) fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(StdDuration::from_secs(30)))
         .http_status_as_error(false)
@@ -305,7 +329,7 @@ fn agent() -> ureq::Agent {
 }
 
 /// Turns a non-2xx response into a short message for the settings page.
-fn http_error(status: u16, body: &str) -> String {
+pub(crate) fn http_error(status: u16, body: &str) -> String {
     match status {
         401 => "Google rejected the sign-in (401). Reconnect the account.".into(),
         403 if body.contains("rateLimit") || body.contains("quota") => "Google API limit reached. Will retry later.".into(),
@@ -366,7 +390,7 @@ fn remember_access(json: &serde_json::Value) -> CmdResult<String> {
     Ok(token)
 }
 
-fn get_json(token: &str, url: &str, query: &[(&str, &str)]) -> CmdResult<serde_json::Value> {
+pub(crate) fn get_json(token: &str, url: &str, query: &[(&str, &str)]) -> CmdResult<serde_json::Value> {
     with_retry(|| {
         let mut req = agent().get(url).header("Authorization", &format!("Bearer {token}"));
         for (k, v) in query {
@@ -401,6 +425,7 @@ fn fetch_calendars(token: &str, previous: &[GcalCalendar]) -> CmdResult<Vec<Gcal
                 selected: old.map_or(primary, |c| c.selected),
                 visible: old.is_none_or(|c| c.visible),
                 default_reminder: popup_minutes(&item["defaultReminders"]),
+                writable: matches!(item["accessRole"].as_str(), Some("owner" | "writer")),
                 id,
             });
         }
@@ -427,6 +452,8 @@ struct Imported {
     url: String,
     /// Pop-up reminder in Google, in minutes before the start.
     reminder: Option<i64>,
+    /// The series this instance belongs to (not stored).
+    series: Option<String>,
 }
 
 /// The earliest pop-up reminder in a Google reminder list (`[{method, minutes}]`).
@@ -434,7 +461,7 @@ fn popup_minutes(list: &serde_json::Value) -> Option<i64> {
     list.as_array()?.iter().filter(|r| r["method"].as_str() == Some("popup")).filter_map(|r| r["minutes"].as_i64()).max()
 }
 
-fn parse_when(v: &serde_json::Value) -> Option<(NaiveDateTime, bool)> {
+pub(crate) fn parse_when(v: &serde_json::Value) -> Option<(NaiveDateTime, bool)> {
     if let Some(dt) = v["dateTime"].as_str() {
         let local = DateTime::parse_from_rfc3339(dt).ok()?.with_timezone(&Local).naive_local();
         return Some((local, false));
@@ -466,6 +493,7 @@ fn convert(item: &serde_json::Value, calendar_reminder: Option<i64>) -> Option<I
         } else {
             popup_minutes(&item["reminders"]["overrides"])
         },
+        series: item["recurringEventId"].as_str().map(str::to_owned),
     })
 }
 
@@ -562,7 +590,8 @@ fn wait_for_code(listener: &TcpListener, state: &str) -> CmdResult<String> {
     }
 }
 
-fn sign_in(app: &AppHandle, client_id: &str, client_secret: &str) -> CmdResult<()> {
+/// Runs the browser sign-in and returns the scopes Google granted.
+fn sign_in(app: &AppHandle, client_id: &str, client_secret: &str, scope: &str) -> CmdResult<String> {
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
     let redirect = format!("http://127.0.0.1:{}", listener.local_addr().map_err(|e| e.to_string())?.port());
     let verifier = random_token(48)?;
@@ -574,7 +603,7 @@ fn sign_in(app: &AppHandle, client_id: &str, client_secret: &str) -> CmdResult<(
             ("client_id", client_id),
             ("redirect_uri", redirect.as_str()),
             ("response_type", "code"),
-            ("scope", SCOPE),
+            ("scope", scope),
             ("code_challenge", challenge.as_str()),
             ("code_challenge_method", "S256"),
             ("state", state.as_str()),
@@ -600,12 +629,12 @@ fn sign_in(app: &AppHandle, client_id: &str, client_secret: &str) -> CmdResult<(
     set_secret(KEY_SECRET, client_secret)?;
     set_secret(KEY_REFRESH, refresh)?;
     remember_access(&json)?;
-    Ok(())
+    Ok(json["scope"].as_str().unwrap_or(scope).to_owned())
 }
 
 // ---- sync ---------------------------------------------------------------------------
 
-fn with_db<T>(app: &AppHandle, f: impl FnOnce(&Db) -> T) -> CmdResult<T> {
+pub(crate) fn with_db<T>(app: &AppHandle, f: impl FnOnce(&Db) -> T) -> CmdResult<T> {
     let state = app.state::<AppState>();
     let db = state.db.lock().map_err(|_| "database lock poisoned".to_string())?;
     Ok(f(&db))
@@ -614,10 +643,25 @@ fn with_db<T>(app: &AppHandle, f: impl FnOnce(&Db) -> T) -> CmdResult<T> {
 /// Fetches every selected calendar and records the outcome in the config.
 /// The database lock is not held while talking to Google.
 fn sync_now(app: &AppHandle) -> CmdResult<GcalStatus> {
+    let _guard = SYNCING.lock().map_err(|_| "sync lock poisoned".to_string())?;
     let config = with_db(app, |db| db.gcal_config())?;
     let result = (|| -> CmdResult<Vec<(String, Vec<Imported>)>> {
         let token = access_token(&config.client_id)?;
-        config.calendars.iter().filter(|c| c.selected).map(|c| Ok((c.id.clone(), fetch_events(&token, c)?))).collect()
+        // Two-way first: it decides which series of the synced calendar stay read-only.
+        let unsupported = match &config.sync_calendar {
+            Some(cal) => two_way(app, &token, cal, &config)?,
+            None => vec![],
+        };
+        let mut fetched = vec![];
+        for c in config.calendars.iter().filter(|c| c.selected) {
+            let mut events = fetch_events(&token, c)?;
+            if config.sync_calendar.as_ref() == Some(&c.id) {
+                // Everything else in the synced calendar is already a Nora event.
+                events.retain(|e| e.series.as_ref().is_some_and(|s| unsupported.contains(s)));
+            }
+            fetched.push((c.id.clone(), events));
+        }
+        Ok(fetched)
     })();
     with_db(app, |db| {
         let mut config = db.gcal_config();
@@ -638,6 +682,33 @@ fn sync_now(app: &AppHandle) -> CmdResult<GcalStatus> {
     })?
 }
 
+/// One sync at a time (timer, manual button and edits can overlap).
+static SYNCING: Mutex<()> = Mutex::new(());
+
+/// Pulls Google's changes into Nora, then pushes Nora's. Returns the series left read-only.
+fn two_way(app: &AppHandle, token: &str, calendar: &str, config: &GcalConfig) -> CmdResult<Vec<String>> {
+    let (items, next_token, full) = crate::gsync::pull(token, calendar, config.sync_token.as_deref())?;
+    let today = Local::now().date_naive();
+    let outcome = with_db(app, |db| db.gsync_apply(&items, full, today).map_err(|e| e.to_string()))??;
+    let mut unsupported = if full { vec![] } else { config.sync_unsupported.clone() };
+    unsupported.retain(|id| !outcome.supported.contains(id));
+    for id in outcome.unsupported {
+        if !unsupported.contains(&id) {
+            unsupported.push(id);
+        }
+    }
+    with_db(app, |db| {
+        let mut c = db.gcal_config();
+        c.sync_token = Some(next_token);
+        c.sync_unsupported = unsupported.clone();
+        db.set_gcal_config(&c).map_err(|e| e.to_string())
+    })??;
+
+    let tz = crate::gsync::time_zone();
+    crate::gsync::push(token, calendar, &tz, &config.device_tag, |f| with_db(app, |db| f(db).map_err(|e| e.to_string()))?)?;
+    Ok(unsupported)
+}
+
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> CmdResult<T> + Send + 'static) -> CmdResult<T> {
     tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())?
 }
@@ -651,16 +722,20 @@ pub fn gcal_status(app: AppHandle) -> CmdResult<GcalStatus> {
 
 /// Opens Google's consent page in the browser, waits for the user to allow access,
 /// then loads the calendar list and runs a first sync.
+/// `write` also asks for permission to change events (two-way sync). An empty secret
+/// reuses the one stored at the last sign-in.
 #[tauri::command]
-pub async fn gcal_connect(app: AppHandle, client_id: String, client_secret: String) -> CmdResult<GcalStatus> {
+pub async fn gcal_connect(app: AppHandle, client_id: String, client_secret: String, write: Option<bool>) -> CmdResult<GcalStatus> {
     let client_id = client_id.trim().to_owned();
-    let client_secret = client_secret.trim().to_owned();
+    let client_secret = Some(client_secret.trim().to_owned()).filter(|s| !s.is_empty()).or_else(|| secret(KEY_SECRET)).unwrap_or_default();
     if client_id.is_empty() || client_secret.is_empty() {
         return Err("Enter the OAuth client ID and client secret.".into());
     }
     blocking(move || {
-        sign_in(&app, &client_id, &client_secret)?;
         let previous = with_db(&app, |db| db.gcal_config())?;
+        let write = write.unwrap_or(previous.sync_calendar.is_some());
+        let scope = if write { format!("{SCOPE} {SCOPE_WRITE}") } else { SCOPE.to_owned() };
+        let granted_scope = sign_in(&app, &client_id, &client_secret, &scope)?;
         let token = access_token(&client_id)?;
         let calendars = fetch_calendars(&token, &previous.calendars)?;
         with_db(&app, |db| {
@@ -668,6 +743,7 @@ pub async fn gcal_connect(app: AppHandle, client_id: String, client_secret: Stri
                 client_id,
                 account: calendars.iter().find(|c| c.primary).map(|c| c.id.clone()),
                 calendars,
+                granted_scope,
                 last_error: None,
                 ..previous
             };
@@ -694,8 +770,49 @@ pub async fn gcal_disconnect(app: AppHandle) -> CmdResult<GcalStatus> {
             db.set_gcal_config(&GcalConfig { client_id: previous.client_id, interval_min: previous.interval_min, ..Default::default() })
                 .map_err(|e| e.to_string())?;
             db.gcal_prune(&[]).map_err(|e| e.to_string())?;
+            db.gsync_unlink_all().map_err(|e| e.to_string())?;
             Ok(db.gcal_status())
         })?
+    })
+    .await
+}
+
+/// Turns two-way sync on with `calendar_id`, moves it to another calendar, or (with `None`)
+/// turns it off. Nora's events stay in Nora either way; links to the old calendar are dropped.
+#[tauri::command]
+pub async fn gcal_set_sync_calendar(app: AppHandle, calendar_id: Option<String>) -> CmdResult<GcalStatus> {
+    blocking(move || {
+        let changed = with_db(&app, |db| -> CmdResult<bool> {
+            let status = db.gcal_status();
+            let mut config = status.config;
+            if config.sync_calendar == calendar_id {
+                return Ok(false);
+            }
+            if let Some(id) = &calendar_id {
+                let Some(cal) = config.calendars.iter_mut().find(|c| &c.id == id) else {
+                    return Err("That calendar is not in the list. Reload the calendar list.".into());
+                };
+                if !cal.writable {
+                    return Err("This calendar is read-only in Google.".into());
+                }
+                if !status.can_write {
+                    return Err("Allow Nora Schedule to change events first (connect again).".into());
+                }
+                // Its read-only leftovers (unsupported series) are shown from the import.
+                cal.selected = true;
+                cal.visible = true;
+            }
+            if config.device_tag.is_empty() {
+                config.device_tag = crate::gsync::new_device_tag();
+            }
+            config.sync_calendar = calendar_id.clone();
+            config.sync_token = None;
+            config.sync_unsupported = vec![];
+            db.gsync_unlink_all().map_err(|e| e.to_string())?;
+            db.set_gcal_config(&config).map_err(|e| e.to_string())?;
+            Ok(true)
+        })??;
+        if changed { sync_now(&app) } else { with_db(&app, |db| db.gcal_status()) }
     })
     .await
 }
@@ -799,6 +916,7 @@ mod tests {
             memo: String::new(),
             url: String::new(),
             reminder: Some(15),
+            series: None,
         };
         db.set_gcal_config(&GcalConfig {
             calendars: vec![GcalCalendar {
@@ -809,6 +927,7 @@ mod tests {
                 selected: true,
                 visible: true,
                 default_reminder: None,
+                writable: true,
             }],
             ..Default::default()
         })
@@ -873,6 +992,7 @@ mod tests {
             memo: String::new(),
             url: String::new(),
             reminder: Some(15),
+            series: None,
         };
         db.gcal_store("cal", &[ev]).unwrap();
         let reminder = |db: &Db| db.gcal_events_between(d("2026-10-07"), d("2026-10-07")).unwrap()[0].event.reminder;

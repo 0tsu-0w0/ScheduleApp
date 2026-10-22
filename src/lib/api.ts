@@ -71,6 +71,8 @@ export interface GcalCalendar {
   visible: boolean;
   /** The calendar's default pop-up reminder in Google, in minutes. */
   default_reminder?: number | null;
+  /** The account may add and change events here. */
+  writable?: boolean;
 }
 
 export type GcalReminder = 'off' | 'google' | { before: number };
@@ -87,6 +89,12 @@ export interface GcalStatus {
   last_error: string | null;
   /** A sign-in is stored on this device (false after restoring a backup elsewhere). */
   connected: boolean;
+  /** The sign-in allows changing events (needed for two-way sync). */
+  can_write: boolean;
+  /** Calendar synced both ways with the app's own events; null = import only. */
+  sync_calendar: string | null;
+  /** Series in the synced calendar the app can't edit (shown read-only). */
+  sync_unsupported: string[];
 }
 
 /** A user-defined label for events, optionally grouped under a category. */
@@ -327,6 +335,15 @@ export interface TrackerSettings {
   tracked_apps: string[];
 }
 
+/** Called after any event is created, changed or deleted (used to push two-way sync soon). */
+export const eventWriteHooks: (() => void)[] = [];
+function afterEventWrite<T>(p: Promise<T>): Promise<T> {
+  return p.then((r) => {
+    for (const hook of eventWriteHooks) hook();
+    return r;
+  });
+}
+
 export const api = {
   /** Paints the native title bar (Windows 11) in the theme's colors, as 0xRRGGBB. */
   setTitlebarColors: (caption: number, text: number, dark: boolean) =>
@@ -346,15 +363,19 @@ export const api = {
   setSetting: (key: string, value: string) => invoke<void>('set_setting', { key, value }),
 
   eventsBetween: (from: DateStr, to: DateStr) => invoke<CalEvent[]>('events_between', { from, to }),
-  saveEvent: (event: CalEvent, scope: Scope = 'all') => invoke<number>('save_event', { event, scope }),
+  saveEvent: (event: CalEvent, scope: Scope = 'all') => afterEventWrite(invoke<number>('save_event', { event, scope })),
   /** Returns the stored event as it was before deleting, for undo. */
   deleteEvent: (id: number, occurrence: DateStr | null = null, scope: Scope = 'all') =>
-    invoke<CalEvent | null>('delete_event', { id, occurrence, scope }),
-  restoreOccurrence: (id: number, day: DateStr) => invoke<void>('restore_occurrence', { id, day }),
+    afterEventWrite(invoke<CalEvent | null>('delete_event', { id, occurrence, scope })),
+  restoreOccurrence: (id: number, day: DateStr) => afterEventWrite(invoke<void>('restore_occurrence', { id, day })),
 
   gcalStatus: () => invoke<GcalStatus>('gcal_status'),
   /** Opens Google's consent page in the browser and resolves once the user allowed access. */
-  gcalConnect: (clientId: string, clientSecret: string) => invoke<GcalStatus>('gcal_connect', { clientId, clientSecret }),
+  /** `write` also asks for permission to change events; an empty secret reuses the stored one. */
+  gcalConnect: (clientId: string, clientSecret: string, write = false) =>
+    invoke<GcalStatus>('gcal_connect', { clientId, clientSecret, write }),
+  /** Turns two-way sync on with a calendar, moves it, or turns it off (null). */
+  gcalSetSyncCalendar: (calendarId: string | null) => invoke<GcalStatus>('gcal_set_sync_calendar', { calendarId }),
   gcalDisconnect: () => invoke<GcalStatus>('gcal_disconnect'),
   /** Fetches the selected calendars; failures are reported in `last_error`, not thrown. */
   gcalSync: () => invoke<GcalStatus>('gcal_sync'),

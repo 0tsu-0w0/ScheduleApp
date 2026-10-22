@@ -272,7 +272,7 @@ pub enum Scope {
     All,
 }
 
-fn repeat_json(r: &Option<Repeat>) -> Option<String> {
+pub(crate) fn repeat_json(r: &Option<Repeat>) -> Option<String> {
     r.as_ref().and_then(|r| serde_json::to_string(r).ok())
 }
 
@@ -280,7 +280,7 @@ fn ids_json(ids: &[i64]) -> String {
     serde_json::to_string(ids).unwrap_or_else(|_| "[]".into())
 }
 
-fn dates_json(d: &[NaiveDate]) -> String {
+pub(crate) fn dates_json(d: &[NaiveDate]) -> String {
     serde_json::to_string(d).unwrap_or_else(|_| "[]".into())
 }
 
@@ -418,7 +418,7 @@ pub(crate) fn parse_d(s: String) -> NaiveDate {
     NaiveDate::parse_from_str(&s, D_FMT).unwrap_or_default()
 }
 
-fn event_from_row(r: &Row) -> DbResult<Event> {
+pub(crate) fn event_from_row(r: &Row) -> DbResult<Event> {
     let links: String = r.get(7)?;
     Ok(Event {
         id: r.get(0)?,
@@ -604,6 +604,7 @@ impl Db {
         conn.execute_batch(crate::gcal::SCHEMA)?;
         migrate(&conn)?;
         crate::gcal::migrate(&conn)?;
+        crate::gsync::migrate(&conn)?;
         Ok(Self { conn })
     }
 
@@ -630,7 +631,7 @@ impl Db {
 
     // ---- events -----------------------------------------------------------
 
-    const EVENT_COLUMNS: &'static str = "id, title, start, end, all_day, color, location, links, memo, repeat, exdates, cancelled, tags, reminder";
+    pub(crate) const EVENT_COLUMNS: &'static str = "id, title, start, end, all_day, color, location, links, memo, repeat, exdates, cancelled, tags, reminder";
 
     fn event(&self, id: i64) -> DbResult<Option<Event>> {
         self.conn
