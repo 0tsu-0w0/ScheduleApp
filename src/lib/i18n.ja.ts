@@ -1041,6 +1041,8 @@ export const ja: Record<Key, string> = {
   'gcal.reason.nora_changed': 'アプリでの新しい変更で上書きしたGoogle側の内容',
   'gcal.restore': '戻す',
   'gcal.restored': '戻しました: {name}',
+  'gcal.reauth': 'Googleの許可が期限切れか、取り消されました。接続し直してください。(毎週こうなる場合は、Googleのプロジェクトの公開ステータスを「本番環境」にしてください。手順書を参照)',
+  'gcal.reconnectNow': '接続し直す',
   'gcal.readOnly': 'Googleカレンダー「{name}」から · 閲覧のみ',
   'gcal.details': '詳細',
   'gcal.openInGoogle': 'Googleカレンダーで開く',

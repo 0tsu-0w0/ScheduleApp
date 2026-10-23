@@ -393,15 +393,6 @@ export interface TrackerSettings {
   tracked_apps: string[];
 }
 
-/** Called after any event is created, changed or deleted (used to push two-way sync soon). */
-export const eventWriteHooks: (() => void)[] = [];
-function afterEventWrite<T>(p: Promise<T>): Promise<T> {
-  return p.then((r) => {
-    for (const hook of eventWriteHooks) hook();
-    return r;
-  });
-}
-
 export const api = {
   /** Paints the native title bar (Windows 11) in the theme's colors, as 0xRRGGBB. */
   setTitlebarColors: (caption: number, text: number, dark: boolean) =>
@@ -431,11 +422,11 @@ export const api = {
   setSetting: (key: string, value: string) => invoke<void>('set_setting', { key, value }),
 
   eventsBetween: (from: DateStr, to: DateStr) => invoke<CalEvent[]>('events_between', { from, to }),
-  saveEvent: (event: CalEvent, scope: Scope = 'all') => afterEventWrite(invoke<number>('save_event', { event, scope })),
+  saveEvent: (event: CalEvent, scope: Scope = 'all') => invoke<number>('save_event', { event, scope }),
   /** Returns the stored event as it was before deleting, for undo. */
   deleteEvent: (id: number, occurrence: DateStr | null = null, scope: Scope = 'all') =>
-    afterEventWrite(invoke<CalEvent | null>('delete_event', { id, occurrence, scope })),
-  restoreOccurrence: (id: number, day: DateStr) => afterEventWrite(invoke<void>('restore_occurrence', { id, day })),
+    invoke<CalEvent | null>('delete_event', { id, occurrence, scope }),
+  restoreOccurrence: (id: number, day: DateStr) => invoke<void>('restore_occurrence', { id, day }),
 
   gcalStatus: () => invoke<GcalStatus>('gcal_status'),
   /** Opens Google's consent page in the browser and resolves once the user allowed access. */
@@ -447,7 +438,7 @@ export const api = {
   gcalSyncPreview: (calendarId: string) => invoke<GsyncPreview>('gcal_sync_preview', { calendarId }),
   gcalSyncHistory: () => invoke<GsyncHistoryEntry[]>('gcal_sync_history'),
   /** Puts a kept version back; it is sent to Google with the next sync. */
-  gcalRestoreHistory: (id: number) => afterEventWrite(invoke<number | null>('gcal_restore_history', { id })),
+  gcalRestoreHistory: (id: number) => invoke<number | null>('gcal_restore_history', { id }),
   gcalDisconnect: () => invoke<GcalStatus>('gcal_disconnect'),
   /** Fetches the selected calendars; failures are reported in `last_error`, not thrown. */
   gcalSync: () => invoke<GcalStatus>('gcal_sync'),

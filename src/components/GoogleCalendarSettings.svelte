@@ -35,7 +35,7 @@
       clientSecret = '';
       toast(t('gcal.connected'), 'success');
     } catch (e) {
-      toast(String(e), 'error');
+      toast(gcalError(e), 'error');
     } finally {
       connecting = false;
     }
@@ -47,7 +47,7 @@
       const s = await p();
       if (s) setGcalStatus(s);
     } catch (e) {
-      toast(String(e), 'error');
+      toast(gcalError(e), 'error');
     } finally {
       busy = false;
     }
@@ -93,7 +93,7 @@
       if (confirm?.id === id) confirm.preview = preview;
     } catch (e) {
       confirm = null;
-      toast(String(e), 'error');
+      toast(gcalError(e), 'error');
     }
   }
 
@@ -111,7 +111,7 @@
 
   async function openHistory() {
     history = await api.gcalSyncHistory().catch((e) => {
-      toast(String(e), 'error');
+      toast(gcalError(e), 'error');
       return null;
     });
   }
@@ -123,12 +123,30 @@
       toast(t('gcal.restored', { name: entry.title }), 'success');
       await openHistory();
     } catch (e) {
-      toast(String(e), 'error');
+      toast(gcalError(e), 'error');
     }
   }
 
   const when = (e: GsyncHistoryEntry) =>
     `${fmt(dateOf(e.start), { month: 'short', day: 'numeric', weekday: 'short' })}${e.all_day ? '' : ' ' + timeOf(e.start)}`;
+
+  /** The sign-in expired or was revoked (backend code `gcal_reauth`, see gcal.rs). */
+  const REAUTH = 'gcal_reauth';
+  const gcalError = (e: unknown) => (String(e).includes(REAUTH) ? t('gcal.reauth') : String(e));
+
+  /** Signs in again with the stored client, keeping the write permission if sync is on. */
+  async function reconnect() {
+    if (!status) return;
+    connecting = true;
+    try {
+      setGcalStatus(await api.gcalConnect(status.client_id, '', !!status.sync_calendar));
+      toast(t('gcal.connected'), 'success');
+    } catch (e) {
+      toast(gcalError(e), 'error');
+    } finally {
+      connecting = false;
+    }
+  }
 
   async function allowWrite() {
     if (!status) return;
@@ -136,7 +154,7 @@
     try {
       setGcalStatus(await api.gcalConnect(status.client_id, '', true));
     } catch (e) {
-      toast(String(e), 'error');
+      toast(gcalError(e), 'error');
     } finally {
       connecting = false;
     }
@@ -174,11 +192,18 @@
 
     <div class="row sync">
       <span class="grow small" class:muted={!status.last_error}>
-        {#if status.last_error}
+        {#if status.last_error === REAUTH}
+          <span class="error"><TriangleAlert size={14} /> {t('gcal.reauth')}</span><br />
+        {:else if status.last_error}
           <span class="error"><TriangleAlert size={14} /> {t('gcal.failed', { error: status.last_error })}</span><br />
         {/if}
         {status.last_sync ? t('gcal.lastSync', { time: fmtTs(status.last_sync, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }) : t('gcal.never')}
       </span>
+      {#if status.last_error === REAUTH}
+        <button class="btn small primary" onclick={reconnect} disabled={connecting}>
+          {#if connecting}<span class="spin"><LoaderCircle size={15} /></span>{/if} {t('gcal.reconnectNow')}
+        </button>
+      {/if}
       <button class="btn small" onclick={syncGcal} disabled={gcal.syncing}>
         {#if gcal.syncing}<span class="spin"><LoaderCircle size={15} /></span> {t('gcal.syncing')}{:else}<RefreshCw size={15} /> {t('gcal.sync')}{/if}
       </button>

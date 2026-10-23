@@ -2,7 +2,7 @@
 //! Argument names are camelCase on the JavaScript side (`groupId` → `group_id`).
 
 use chrono::NaiveDate;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 use tauri::ipc::{InvokeBody, Request};
 
 use crate::AppState;
@@ -70,6 +70,14 @@ pub fn set_setting(state: State<AppState>, key: String, value: String) -> CmdRes
 
 // ---- events -------------------------------------------------------------------
 
+/// Sent to the main window after any event is created, changed or deleted, from whichever
+/// window, so two-way Google sync can send the change soon (issue #13).
+pub const EVENTS_CHANGED: &str = "nora://events-changed";
+
+pub fn events_changed(app: &AppHandle) {
+    let _ = app.emit_to("main", EVENTS_CHANGED, ());
+}
+
 /// Nora's own events plus events imported from Google Calendar (negative ids, read-only).
 #[tauri::command]
 pub fn events_between(state: State<AppState>, from: NaiveDate, to: NaiveDate) -> CmdResult<Vec<CalItem>> {
@@ -82,28 +90,40 @@ pub fn events_between(state: State<AppState>, from: NaiveDate, to: NaiveDate) ->
 }
 
 #[tauri::command]
-pub fn save_event(state: State<AppState>, event: Event, scope: Option<Scope>) -> CmdResult<i64> {
+pub fn save_event(app: AppHandle, state: State<AppState>, event: Event, scope: Option<Scope>) -> CmdResult<i64> {
     if event.id < 0 {
         return Err("Events imported from Google Calendar can't be changed here.".into());
     }
     if event.end < event.start {
         return Err("The event must end after it starts.".into());
     }
-    with_db(&state, |db| db.save_event(&event, scope.unwrap_or(Scope::All)))
+    let id = with_db(&state, |db| db.save_event(&event, scope.unwrap_or(Scope::All)))?;
+    events_changed(&app);
+    Ok(id)
 }
 
 /// Deletes an event (or one occurrence of a repeating event) and returns the stored row for undo.
 #[tauri::command]
-pub fn delete_event(state: State<AppState>, id: i64, occurrence: Option<NaiveDate>, scope: Option<Scope>) -> CmdResult<Option<Event>> {
+pub fn delete_event(
+    app: AppHandle,
+    state: State<AppState>,
+    id: i64,
+    occurrence: Option<NaiveDate>,
+    scope: Option<Scope>,
+) -> CmdResult<Option<Event>> {
     if id < 0 {
         return Err("Events imported from Google Calendar can't be deleted here.".into());
     }
-    with_db(&state, |db| db.delete_event(id, occurrence, scope.unwrap_or(Scope::All)))
+    let stored = with_db(&state, |db| db.delete_event(id, occurrence, scope.unwrap_or(Scope::All)))?;
+    events_changed(&app);
+    Ok(stored)
 }
 
 #[tauri::command]
-pub fn restore_occurrence(state: State<AppState>, id: i64, day: NaiveDate) -> CmdResult<()> {
-    with_db(&state, |db| db.restore_occurrence(id, day))
+pub fn restore_occurrence(app: AppHandle, state: State<AppState>, id: i64, day: NaiveDate) -> CmdResult<()> {
+    with_db(&state, |db| db.restore_occurrence(id, day))?;
+    events_changed(&app);
+    Ok(())
 }
 
 // ---- tags ---------------------------------------------------------------------

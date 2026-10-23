@@ -1,6 +1,7 @@
 // Google Calendar import: the shared status and the auto-refresh timer (FR-12.5).
 // Nothing runs until an account is connected in Settings.
-import { api, eventWriteHooks, type GcalStatus } from './api';
+import { listen } from '@tauri-apps/api/event';
+import { api, type GcalStatus } from './api';
 import { data } from './state.svelte';
 
 export const gcal = $state({ status: null as GcalStatus | null, syncing: false });
@@ -25,7 +26,6 @@ function schedulePush() {
     else void syncGcal();
   }, PUSH_DELAY_MS);
 }
-eventWriteHooks.push(schedulePush);
 
 /** Stores a fresh status, reloads the calendar views and re-arms the timer. */
 export function setGcalStatus(status: GcalStatus) {
@@ -59,6 +59,9 @@ export async function syncGcal() {
 
 /** Called once at startup: syncs right away when connected, then on the chosen interval. */
 export async function initGcal() {
+  // The backend announces every event write, including ones made in the overlay panel
+  // (EVENTS_CHANGED in src-tauri/src/commands.rs).
+  if ('__TAURI_INTERNALS__' in window) void listen('nora://events-changed', schedulePush).catch(() => {});
   try {
     gcal.status = await api.gcalStatus();
   } catch {

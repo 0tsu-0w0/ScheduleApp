@@ -328,10 +328,15 @@ pub(crate) fn agent() -> ureq::Agent {
         .into()
 }
 
+/// Error code the frontend shows as "sign in again": the sign-in expired or was revoked
+/// (for example after 7 days while the Google project is in Testing).
+pub const REAUTH: &str = "gcal_reauth";
+
 /// Turns a non-2xx response into a short message for the settings page.
 pub(crate) fn http_error(status: u16, body: &str) -> String {
     match status {
-        401 => "Google rejected the sign-in (401). Reconnect the account.".into(),
+        401 => REAUTH.into(),
+        400 if body.contains("invalid_grant") => REAUTH.into(),
         403 if body.contains("rateLimit") || body.contains("quota") => "Google API limit reached. Will retry later.".into(),
         429 => "Google API limit reached. Will retry later.".into(),
         _ => {
@@ -799,7 +804,9 @@ pub fn gcal_sync_history(app: AppHandle) -> CmdResult<Vec<crate::gsync::HistoryE
 /// Puts a kept version back; the next sync sends it to Google.
 #[tauri::command]
 pub fn gcal_restore_history(app: AppHandle, id: i64) -> CmdResult<Option<i64>> {
-    with_db(&app, |db| db.gsync_restore(id).map_err(|e| e.to_string()))?
+    let restored = with_db(&app, |db| db.gsync_restore(id).map_err(|e| e.to_string()))??;
+    crate::commands::events_changed(&app);
+    Ok(restored)
 }
 
 /// Turns two-way sync on with `calendar_id`, moves it to another calendar, or (with `None`)
@@ -894,6 +901,14 @@ mod tests {
 
     fn dt(s: &str) -> NaiveDateTime {
         NaiveDateTime::parse_from_str(s, DT_FMT).unwrap()
+    }
+
+    #[test]
+    fn expired_or_revoked_sign_ins_ask_to_reconnect() {
+        assert_eq!(http_error(401, ""), REAUTH);
+        assert_eq!(http_error(400, r#"{"error": "invalid_grant", "error_description": "Token has been expired or revoked."}"#), REAUTH);
+        assert!(http_error(400, r#"{"error": "invalid_request"}"#).starts_with("Google returned 400"));
+        assert!(http_error(429, "").contains("limit"));
     }
 
     #[test]
