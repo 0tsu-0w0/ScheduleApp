@@ -1,15 +1,16 @@
 <script lang="ts">
   // Settings → Google Calendar: connect an account, pick calendars, sync (FR-12.1–12.6).
   import { openUrl } from '@tauri-apps/plugin-opener';
-  import { CalendarSync, ExternalLink, LoaderCircle, RefreshCw, TriangleAlert, Unplug } from '@lucide/svelte';
-  import { api, type GcalCalendar, type GcalReminder } from '../lib/api';
+  import { CalendarSync, ExternalLink, History, LoaderCircle, RefreshCw, RotateCcw, TriangleAlert, Unplug } from '@lucide/svelte';
+  import Modal from './Modal.svelte';
+  import { api, type GcalCalendar, type GcalReminder, type GsyncHistoryEntry, type GsyncPreview } from '../lib/api';
   import { hex } from '../lib/colors';
-  import { fmtTs } from '../lib/dates';
+  import { dateOf, fmt, fmtTs, timeOf } from '../lib/dates';
   import { gcal, INTERVALS, setGcalStatus, syncGcal } from '../lib/gcal.svelte';
   import Select from './Select.svelte';
   import { t } from '../lib/i18n.svelte';
   import { reminderLabel } from '../lib/reminders';
-  import { toast } from '../lib/state.svelte';
+  import { data, toast } from '../lib/state.svelte';
 
   const CONSOLE_URL = 'https://console.cloud.google.com/apis/credentials';
 
@@ -78,11 +79,56 @@
     ...(status?.calendars ?? []).filter((c) => c.writable).map((c) => ({ value: c.id, label: c.name, color: hex(c.color) })),
   ]);
 
-  function setSyncCalendar(id: string) {
-    void act(() => api.gcalSetSyncCalendar(id || null)).then(() => {
-      if (id && gcal.status?.sync_calendar === id) toast(t('gcal.twoWayOn'), 'success');
+  /** Asked before sync starts: what would be sent and received (issue #11). */
+  let confirm = $state<{ id: string; name: string; preview: GsyncPreview | null } | null>(null);
+
+  async function setSyncCalendar(id: string) {
+    if (!id) {
+      void act(() => api.gcalSetSyncCalendar(null));
+      return;
+    }
+    confirm = { id, name: status?.calendars.find((c) => c.id === id)?.name ?? id, preview: null };
+    try {
+      const preview = await api.gcalSyncPreview(id);
+      if (confirm?.id === id) confirm.preview = preview;
+    } catch (e) {
+      confirm = null;
+      toast(String(e), 'error');
+    }
+  }
+
+  function startSync() {
+    const id = confirm?.id;
+    confirm = null;
+    if (!id) return;
+    void act(() => api.gcalSetSyncCalendar(id)).then(() => {
+      if (gcal.status?.sync_calendar === id) toast(t('gcal.twoWayOn'), 'success');
     });
   }
+
+  // ---- history of replaced versions
+  let history = $state<GsyncHistoryEntry[] | null>(null);
+
+  async function openHistory() {
+    history = await api.gcalSyncHistory().catch((e) => {
+      toast(String(e), 'error');
+      return null;
+    });
+  }
+
+  async function restore(entry: GsyncHistoryEntry) {
+    try {
+      await api.gcalRestoreHistory(entry.id);
+      data.version++;
+      toast(t('gcal.restored', { name: entry.title }), 'success');
+      await openHistory();
+    } catch (e) {
+      toast(String(e), 'error');
+    }
+  }
+
+  const when = (e: GsyncHistoryEntry) =>
+    `${fmt(dateOf(e.start), { month: 'short', day: 'numeric', weekday: 'short' })}${e.all_day ? '' : ' ' + timeOf(e.start)}`;
 
   async function allowWrite() {
     if (!status) return;
@@ -168,6 +214,9 @@
         {#if status.sync_calendar && status.sync_unsupported.length}
           <br /><span class="small muted">{t('gcal.twoWayUnsupported', { n: status.sync_unsupported.length })}</span>
         {/if}
+        {#if status.sync_calendar}
+          <br /><button class="link small" onclick={openHistory}><History size={13} /> {t('gcal.history')}</button>
+        {/if}
       </span>
       {#if status.can_write}
         <div class="sync-select">
@@ -218,6 +267,45 @@
     </div>
   {/if}
 </section>
+
+{#if confirm}
+  <Modal title={t('gcal.confirmTitle', { name: confirm.name })} onclose={() => (confirm = null)} width={460}>
+    {#if confirm.preview}
+      <ul class="preview-list">
+        <li>{t('gcal.confirmSend', { n: confirm.preview.send })}</li>
+        <li>{t('gcal.confirmReceive', { n: confirm.preview.receive })}</li>
+        {#if confirm.preview.linked}<li>{t('gcal.confirmLinked', { n: confirm.preview.linked })}</li>{/if}
+      </ul>
+      <p class="small muted">{t('gcal.confirmNote')}</p>
+    {:else}
+      <p class="muted"><span class="spin"><LoaderCircle size={15} /></span> {t('gcal.confirmLoading')}</p>
+    {/if}
+    {#snippet footer()}
+      <span class="spacer"></span>
+      <button class="btn ghost" onclick={() => (confirm = null)}>{t('common.cancel')}</button>
+      <button class="btn primary" onclick={startSync} disabled={!confirm?.preview}>{t('gcal.confirmStart')}</button>
+    {/snippet}
+  </Modal>
+{/if}
+
+{#if history}
+  <Modal title={t('gcal.history')} onclose={() => (history = null)} width={520}>
+    <p class="small muted">{t('gcal.historyBody')}</p>
+    <div class="history">
+      {#each history as h (h.id)}
+        <div class="history-item">
+          <span class="grow">
+            <span class="strong">{h.title}</span> <span class="small muted">{when(h)}</span><br />
+            <span class="small muted">{t(`gcal.reason.${h.reason}`)} · {fmtTs(Math.floor(h.at / 1000), { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+          </span>
+          <button class="btn small" onclick={() => restore(h)}><RotateCcw size={14} /> {t('gcal.restore')}</button>
+        </div>
+      {:else}
+        <p class="muted">{t('gcal.historyEmpty')}</p>
+      {/each}
+    </div>
+  </Modal>
+{/if}
 
 <style>
   .section-head {
@@ -275,6 +363,28 @@
     border-radius: 4px;
     background: var(--c);
     flex: none;
+  }
+  .history {
+    display: grid;
+    gap: 2px;
+    max-height: 420px;
+    overflow: auto;
+  }
+  .history-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 0;
+    border-top: 1px solid var(--border);
+  }
+  .history-item:first-child {
+    border-top: 0;
+  }
+  .preview-list {
+    margin: 0;
+    padding-left: 20px;
+    display: grid;
+    gap: 6px;
   }
   .sync-select {
     min-width: 220px;

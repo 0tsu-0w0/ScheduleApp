@@ -48,6 +48,11 @@ export function installMock() {
         { id: 'date', value: 'date' }, { id: 'roles', value: 'list' }, { id: 'folder', value: 'text' }, { id: 'link', value: 'url' }] },
     ],
   };
+  // Two-way sync history (see components/GoogleCalendarSettings.svelte).
+  let gsyncHistory = [
+    { id: 1, title: 'Team lunch', reason: 'google_changed', at: Date.now() - 3_600_000, start: toDateTime(t, '12:00'), all_day: false },
+    { id: 2, title: 'Dentist', reason: 'google_deleted', at: Date.now() - 86_400_000, start: toDateTime(addDays(t, 1), '10:00'), all_day: false },
+  ];
   // Automatic backups (see components/AutoBackupSettings.svelte).
   const autoBackup = {
     config: { enabled: false, dir: '', interval_days: 1, keep: 7 },
@@ -228,6 +233,9 @@ export function installMock() {
       case 'autobackup_run_now': Object.assign(autoBackup, { last_run: Math.floor(Date.now() / 1000), last_file: `Nora-auto-${t}_090000.nora`, last_error: null }); return { ...autoBackup };
       case 'gcal_status': return { ...gcal };
       case 'gcal_connect': Object.assign(gcal, { connected: true, client_id: a.clientId, can_write: gcal.can_write || !!a.write, last_sync: Math.floor(Date.now() / 1000) }); return { ...gcal };
+      case 'gcal_sync_preview': return { send: events.length, receive: 4, linked: 1 };
+      case 'gcal_sync_history': return gsyncHistory;
+      case 'gcal_restore_history': gsyncHistory = gsyncHistory.filter((h) => h.id !== a.id); return 1;
       case 'gcal_set_sync_calendar': gcal.sync_calendar = a.calendarId; return { ...gcal };
       case 'gcal_disconnect': Object.assign(gcal, { connected: false, account: null, calendars: [], last_sync: null }); return { ...gcal };
       case 'gcal_sync': case 'gcal_refresh_calendars': gcal.last_sync = Math.floor(Date.now() / 1000); return { ...gcal };

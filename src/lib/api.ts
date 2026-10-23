@@ -75,6 +75,25 @@ export interface GcalCalendar {
   writable?: boolean;
 }
 
+/** What turning two-way sync on would do. */
+export interface GsyncPreview {
+  send: number;
+  receive: number;
+  /** Events found on both sides, linked instead of copied. */
+  linked: number;
+}
+
+/** A version replaced or deleted by two-way sync, restorable for 30 days. */
+export interface GsyncHistoryEntry {
+  id: number;
+  title: string;
+  reason: 'google_changed' | 'google_deleted' | 'nora_changed';
+  /** When it was replaced, in ms. */
+  at: number;
+  start: DateTime;
+  all_day: boolean;
+}
+
 export type GcalReminder = 'off' | 'google' | { before: number };
 
 export interface GcalStatus {
@@ -425,6 +444,10 @@ export const api = {
     invoke<GcalStatus>('gcal_connect', { clientId, clientSecret, write }),
   /** Turns two-way sync on with a calendar, moves it, or turns it off (null). */
   gcalSetSyncCalendar: (calendarId: string | null) => invoke<GcalStatus>('gcal_set_sync_calendar', { calendarId }),
+  gcalSyncPreview: (calendarId: string) => invoke<GsyncPreview>('gcal_sync_preview', { calendarId }),
+  gcalSyncHistory: () => invoke<GsyncHistoryEntry[]>('gcal_sync_history'),
+  /** Puts a kept version back; it is sent to Google with the next sync. */
+  gcalRestoreHistory: (id: number) => afterEventWrite(invoke<number | null>('gcal_restore_history', { id })),
   gcalDisconnect: () => invoke<GcalStatus>('gcal_disconnect'),
   /** Fetches the selected calendars; failures are reported in `last_error`, not thrown. */
   gcalSync: () => invoke<GcalStatus>('gcal_sync'),

@@ -10,12 +10,15 @@
 //! - Repeating events travel as RRULE/EXDATE. Google rules Nora can't represent (e.g.
 //!   "second Tuesday") are not pulled; they stay visible read-only through the import cache.
 //! - Writes made by the sync itself bump `gsync_rev`, which the triggers ignore.
+//! - Whatever a sync replaces or deletes is kept in `gsync_history` for 30 days and can be
+//!   restored (issue #11). On a full pull, an unlinked Nora event identical to a Google one
+//!   is linked to it instead of being copied twice.
 
 use chrono::{DateTime, Duration, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use rusqlite::params;
 use serde_json::{Value, json};
 
-use crate::db::{Db, DbResult, Event, dates_json, event_from_row, repeat_json};
+use crate::db::{Db, DbResult, Event, Scope, dates_json, event_from_row, repeat_json};
 use crate::recurrence::{Freq, Repeat};
 
 type CmdResult<T> = Result<T, String>;
@@ -25,6 +28,9 @@ const DT_FMT: &str = "%Y-%m-%d %H:%M";
 const KEEP_PAST_DAYS: i64 = 365;
 /// Color of events that arrive from Google (Nora's default lavender).
 const PULLED_COLOR: u32 = 0x7c74ff;
+
+/// How long replaced or deleted content stays restorable.
+const HISTORY_DAYS: i64 = 30;
 
 /// Milliseconds since the epoch, as SQLite computes it.
 const NOW_MS: &str = "CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)";
@@ -46,6 +52,14 @@ pub fn migrate(conn: &rusqlite::Connection) -> DbResult<()> {
     conn.execute_batch(&format!(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_events_google ON events(google_id) WHERE google_id IS NOT NULL;
          CREATE TABLE IF NOT EXISTS gsync_tombstones (google_id TEXT PRIMARY KEY, deleted_at INTEGER NOT NULL);
+         CREATE TABLE IF NOT EXISTS gsync_history (
+             id       INTEGER PRIMARY KEY,
+             event_id INTEGER,
+             title    TEXT    NOT NULL,
+             reason   TEXT    NOT NULL,
+             snapshot TEXT    NOT NULL,
+             at       INTEGER NOT NULL
+         );
          CREATE TRIGGER IF NOT EXISTS events_gsync_insert AFTER INSERT ON events WHEN NEW.gsync_rev = 0
          BEGIN UPDATE events SET updated_at = {NOW_MS} WHERE id = NEW.id; END;
          CREATE TRIGGER IF NOT EXISTS events_gsync_update
@@ -298,6 +312,78 @@ pub struct PullOutcome {
     pub supported: Vec<String>,
 }
 
+/// Why a version was kept in the history.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reason {
+    /// Nora's version was replaced by a newer change from Google.
+    GoogleChanged,
+    /// Nora's event was removed because Google deleted it (or Nora can't edit its rule).
+    GoogleDeleted,
+    /// Google's change was dropped because Nora's change was newer.
+    NoraChanged,
+}
+
+impl Reason {
+    fn key(self) -> &'static str {
+        match self {
+            Reason::GoogleChanged => "google_changed",
+            Reason::GoogleDeleted => "google_deleted",
+            Reason::NoraChanged => "nora_changed",
+        }
+    }
+}
+
+/// A restorable version, as listed in Settings.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct HistoryEntry {
+    pub id: i64,
+    pub title: String,
+    pub reason: String,
+    /// When it was replaced, in ms.
+    pub at: i64,
+    pub start: chrono::NaiveDateTime,
+    pub all_day: bool,
+}
+
+/// What turning sync on would do (shown before it starts).
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct Preview {
+    /// Nora events that would be sent to Google.
+    pub send: usize,
+    /// Google events that would become Nora events.
+    pub receive: usize,
+    /// Events found on both sides, linked instead of copied.
+    pub linked: usize,
+}
+
+/// The synced fields of two versions are the same.
+fn same_content(a: &Event, b: &Event) -> bool {
+    a.title == b.title
+        && a.start == b.start
+        && a.end == b.end
+        && a.all_day == b.all_day
+        && a.location == b.location
+        && a.memo == b.memo
+        && a.repeat == b.repeat
+        && a.exdates == b.exdates
+}
+
+/// Google's version of an item as a Nora event (for the history).
+fn pulled_event(p: &Pulled, repeat: &Option<Repeat>, exdates: &[NaiveDate], base: &Event) -> Option<Event> {
+    Some(Event {
+        title: p.title.clone(),
+        start: p.start?,
+        end: p.end?,
+        all_day: p.all_day,
+        location: p.location.clone(),
+        memo: p.memo.clone(),
+        repeat: repeat.clone(),
+        exdates: exdates.to_vec(),
+        ..base.clone()
+    })
+}
+
 impl Db {
     fn linked_where(&self, condition: &str, args: impl rusqlite::Params) -> DbResult<Vec<Linked>> {
         let sql = format!("SELECT {}, {EXTRA} FROM events WHERE {condition}", Self::EVENT_COLUMNS);
@@ -353,8 +439,109 @@ impl Db {
         )
     }
 
+    /// Keeps `event` in the history and drops entries older than `HISTORY_DAYS`.
+    fn remember(&self, reason: Reason, event_id: Option<i64>, event: &Event) -> DbResult<()> {
+        let snapshot = serde_json::to_string(event).unwrap_or_default();
+        self.conn.execute(
+            &format!("INSERT INTO gsync_history(event_id, title, reason, snapshot, at) VALUES(?1, ?2, ?3, ?4, {NOW_MS})"),
+            params![event_id, event.title, reason.key(), snapshot],
+        )?;
+        self.conn.execute(
+            &format!("DELETE FROM gsync_history WHERE at < {NOW_MS} - ?1"),
+            [HISTORY_DAYS * 86_400_000],
+        )?;
+        Ok(())
+    }
+
+    /// Restorable versions, newest first.
+    pub fn gsync_history(&self) -> DbResult<Vec<HistoryEntry>> {
+        let mut st = self.conn.prepare("SELECT id, title, reason, at, snapshot FROM gsync_history ORDER BY at DESC, id DESC")?;
+        let rows = st.query_map([], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)?, r.get::<_, String>(4)?))
+        })?;
+        let mut out = vec![];
+        for row in rows {
+            let (id, title, reason, at, snapshot) = row?;
+            if let Ok(e) = serde_json::from_str::<Event>(&snapshot) {
+                out.push(HistoryEntry { id, title, reason, at, start: e.start, all_day: e.all_day });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Puts a kept version back. It counts as an edit in Nora, so the next sync sends it
+    /// to Google. Returns the id of the restored event.
+    pub fn gsync_restore(&self, history_id: i64) -> DbResult<Option<i64>> {
+        let found: Option<(Option<i64>, String)> = self
+            .conn
+            .query_row("SELECT event_id, snapshot FROM gsync_history WHERE id = ?1", [history_id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .ok();
+        let Some((event_id, snapshot)) = found else { return Ok(None) };
+        let Ok(old) = serde_json::from_str::<Event>(&snapshot) else { return Ok(None) };
+        let current = match event_id {
+            Some(id) => self.linked_where("id = ?1", [id])?.into_iter().next(),
+            None => None,
+        };
+        let id = match current {
+            // Still there: bring back the synced fields, keep Nora-only ones (color, tags…).
+            Some(c) => {
+                let restored = Event {
+                    title: old.title.clone(),
+                    start: old.start,
+                    end: old.end,
+                    all_day: old.all_day,
+                    location: old.location.clone(),
+                    memo: old.memo.clone(),
+                    repeat: old.repeat.clone(),
+                    occurrence: None,
+                    ..c.event.clone()
+                };
+                self.save_event(&restored, Scope::All)?
+            }
+            None => self.save_event(&Event { id: 0, occurrence: None, ..old.clone() }, Scope::All)?,
+        };
+        // save_event keeps (or clears) skipped dates; set the kept ones explicitly.
+        self.conn.execute("UPDATE events SET exdates = ?1 WHERE id = ?2", params![dates_json(&old.exdates), id])?;
+        self.conn.execute("DELETE FROM gsync_history WHERE id = ?1", [history_id])?;
+        Ok(Some(id))
+    }
+
+    /// An unlinked Nora event with exactly this content, if any.
+    fn unlinked_twin(&self, p: &Pulled, repeat: &Option<Repeat>) -> DbResult<Option<Linked>> {
+        let (Some(start), Some(end)) = (p.start, p.end) else { return Ok(None) };
+        Ok(self
+            .linked_where(
+                "google_id IS NULL AND title = ?1 AND start = ?2 AND end = ?3 AND all_day = ?4 AND repeat IS ?5",
+                params![p.title, start.format(DT_FMT).to_string(), end.format(DT_FMT).to_string(), p.all_day, repeat_json(repeat)],
+            )?
+            .into_iter()
+            .next())
+    }
+
+    /// Counts what turning sync on with these Google items would do.
+    pub fn gsync_preview(&self, items: &[Pulled], today: NaiveDate) -> DbResult<Preview> {
+        let oldest = today - Duration::days(KEEP_PAST_DAYS);
+        let mut linked = std::collections::HashSet::new();
+        let mut receive = 0;
+        for p in items.iter().filter(|p| !p.cancelled && p.series.is_none()) {
+            let Ok((repeat, _)) = parse_recurrence(&p.recurrence, p.start.map_or(today, |s| s.date())) else { continue };
+            if repeat.is_none() && p.end.is_none_or(|e| e.date() < oldest) {
+                continue;
+            }
+            match self.unlinked_twin(p, &repeat)? {
+                Some(twin) if linked.insert(twin.event.id) => {}
+                _ => receive += 1,
+            }
+        }
+        let total: i64 = self.conn.query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0))?;
+        Ok(Preview { send: total as usize - linked.len(), receive, linked: linked.len() })
+    }
+
     /// Deletes a row because Google deleted it (no tombstone, so nothing is sent back).
     fn sync_delete(&self, id: i64, google_id: Option<&str>) -> DbResult<()> {
+        if let Some(l) = self.linked_where("id = ?1", [id])?.into_iter().next() {
+            self.remember(Reason::GoogleDeleted, None, &l.event)?;
+        }
         self.conn.execute("DELETE FROM events WHERE id = ?1", [id])?;
         if let Some(g) = google_id {
             self.gsync_forget_tombstone(g)?;
@@ -363,8 +550,16 @@ impl Db {
     }
 
     /// Writes content that came from Google onto an existing row, leaving it clean.
-    fn sync_overwrite(&self, id: i64, p: &Pulled, repeat: &Option<Repeat>, exdates: &[NaiveDate]) -> DbResult<()> {
+    /// The replaced version is kept in the history when it differed.
+    fn sync_overwrite(&self, local: &Linked, p: &Pulled, repeat: &Option<Repeat>, exdates: &[NaiveDate]) -> DbResult<()> {
         let (Some(start), Some(end)) = (p.start, p.end) else { return Ok(()) };
+        let id = local.event.id;
+        if let Some(google) = pulled_event(p, repeat, exdates, &local.event)
+            && !same_content(&google, &local.event)
+            && local.google_id.is_some()
+        {
+            self.remember(Reason::GoogleChanged, Some(id), &local.event)?;
+        }
         self.conn.execute(
             &format!(
                 "UPDATE events SET title = ?1, start = ?2, end = ?3, all_day = ?4, location = ?5, memo = ?6, repeat = ?7,
@@ -480,11 +675,31 @@ impl Db {
             }
 
             match local {
-                Some(l) if l.dirty() && l.updated_at > p.updated_ms => {} // Nora's change is newer; it is pushed next.
-                Some(l) => self.sync_overwrite(l.event.id, p, &repeat, &exdates)?,
+                Some(l) if l.dirty() && l.updated_at > p.updated_ms => {
+                    // Nora's change is newer and is pushed next; keep Google's version restorable.
+                    if let Some(google) = pulled_event(p, &repeat, &exdates, &l.event)
+                        && !same_content(&google, &l.event)
+                    {
+                        self.remember(Reason::NoraChanged, Some(l.event.id), &google)?;
+                    }
+                }
+                Some(l) => self.sync_overwrite(&l, p, &repeat, &exdates)?,
                 None => {
-                    let ended = p.end.map_or(true, |e| e.date() < oldest);
+                    let ended = p.end.is_none_or(|e| e.date() < oldest);
                     if repeat.is_none() && ended {
+                        continue;
+                    }
+                    // First sync: the same event already in Nora is linked, not copied.
+                    if full
+                        && p.series.is_none()
+                        && let Some(twin) = self.unlinked_twin(p, &repeat)?
+                    {
+                        self.conn.execute(
+                            "UPDATE events SET google_id = ?1 WHERE id = ?2",
+                            params![p.id, twin.event.id],
+                        )?;
+                        let linked = Linked { google_id: Some(p.id.clone()), ..twin };
+                        self.sync_overwrite(&linked, p, &repeat, &exdates)?;
                         continue;
                     }
                     self.sync_insert(p, &repeat, &exdates)?;
@@ -897,5 +1112,64 @@ mod tests {
         let t = to_google(&event("Call", "2026-10-05 09:00", "2026-10-05 09:30"), "Asia/Tokyo", &[], true);
         assert_eq!(t["start"]["timeZone"], "Asia/Tokyo");
         assert!(t.get("recurrence").is_none());
+    }
+
+    #[test]
+    fn replaced_and_deleted_versions_can_be_restored() {
+        let (db, path) = open("history");
+        let today = d("2026-10-07");
+        db.gsync_apply(&[pulled("a", "Lunch", "2026-10-08 12:00", "2026-10-08 13:00", 1)], false, today).unwrap();
+        let id = find_linked(&db, "a").unwrap().unwrap().event.id;
+
+        // Google changes it: Nora's old version is kept.
+        db.gsync_apply(&[pulled("a", "Lunch with B", "2026-10-08 12:00", "2026-10-08 13:00", i64::MAX / 4)], false, today).unwrap();
+        let h = db.gsync_history().unwrap();
+        assert_eq!(h.len(), 1);
+        assert_eq!((h[0].title.as_str(), h[0].reason.as_str()), ("Lunch", "google_changed"));
+
+        // Restoring brings the title back and marks it to be sent to Google.
+        assert_eq!(db.gsync_restore(h[0].id).unwrap(), Some(id));
+        let row = linked(&db, id);
+        assert_eq!(row.event.title, "Lunch");
+        assert!(row.dirty());
+        assert!(db.gsync_history().unwrap().is_empty());
+
+        // Nora's edit is newer than Google's: Google's version is kept instead.
+        db.gsync_apply(&[pulled("a", "Lunch (Google edit)", "2026-10-08 12:00", "2026-10-08 13:00", 5)], false, today).unwrap();
+        assert_eq!(linked(&db, id).event.title, "Lunch");
+        assert_eq!(db.gsync_history().unwrap()[0].reason, "nora_changed");
+
+        // Deleted in Google: the event comes back as a new one when restored.
+        db.gsync_mark_pushed(&linked(&db, id), "a").unwrap();
+        db.gsync_apply(&[Pulled { cancelled: true, ..pulled("a", "", "2026-10-08 12:00", "2026-10-08 13:00", i64::MAX / 2) }], false, today).unwrap();
+        let deleted = db.gsync_history().unwrap().into_iter().find(|h| h.reason == "google_deleted").unwrap();
+        let new_id = db.gsync_restore(deleted.id).unwrap().unwrap();
+        assert_eq!(linked(&db, new_id).event.title, "Lunch");
+        assert!(linked(&db, new_id).google_id.is_none());
+        drop(db);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn first_sync_links_identical_events_instead_of_copying() {
+        let (db, path) = open("twin");
+        let today = d("2026-10-07");
+        let mine = db.save_event(&event("Dentist", "2026-10-09 10:00", "2026-10-09 11:00"), Scope::All).unwrap();
+        db.save_event(&event("Only in Nora", "2026-10-10 10:00", "2026-10-10 11:00"), Scope::All).unwrap();
+        let items = [
+            pulled("g1", "Dentist", "2026-10-09 10:00", "2026-10-09 11:00", 1),
+            pulled("g2", "Only in Google", "2026-10-11 10:00", "2026-10-11 11:00", 1),
+        ];
+        assert_eq!(db.gsync_preview(&items, today).unwrap(), Preview { send: 1, receive: 1, linked: 1 });
+
+        db.gsync_apply(&items, true, today).unwrap();
+        let twin = find_linked(&db, "g1").unwrap().unwrap();
+        assert_eq!(twin.event.id, mine, "linked, not copied");
+        assert!(!twin.dirty());
+        let n: i64 = db.conn.query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 3);
+        assert!(db.gsync_history().unwrap().is_empty(), "identical content is not history");
+        drop(db);
+        let _ = std::fs::remove_file(path);
     }
 }

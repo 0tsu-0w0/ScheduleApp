@@ -777,6 +777,31 @@ pub async fn gcal_disconnect(app: AppHandle) -> CmdResult<GcalStatus> {
     .await
 }
 
+/// What turning two-way sync on with `calendar_id` would send and receive (asked before starting).
+#[tauri::command]
+pub async fn gcal_sync_preview(app: AppHandle, calendar_id: String) -> CmdResult<crate::gsync::Preview> {
+    blocking(move || {
+        let config = with_db(&app, |db| db.gcal_config())?;
+        let token = access_token(&config.client_id)?;
+        let (items, _, _) = crate::gsync::pull(&token, &calendar_id, None)?;
+        let today = Local::now().date_naive();
+        with_db(&app, |db| db.gsync_preview(&items, today).map_err(|e| e.to_string()))?
+    })
+    .await
+}
+
+/// Versions replaced or deleted by two-way sync in the last 30 days, newest first.
+#[tauri::command]
+pub fn gcal_sync_history(app: AppHandle) -> CmdResult<Vec<crate::gsync::HistoryEntry>> {
+    with_db(&app, |db| db.gsync_history().map_err(|e| e.to_string()))?
+}
+
+/// Puts a kept version back; the next sync sends it to Google.
+#[tauri::command]
+pub fn gcal_restore_history(app: AppHandle, id: i64) -> CmdResult<Option<i64>> {
+    with_db(&app, |db| db.gsync_restore(id).map_err(|e| e.to_string()))?
+}
+
 /// Turns two-way sync on with `calendar_id`, moves it to another calendar, or (with `None`)
 /// turns it off. Nora's events stay in Nora either way; links to the old calendar are dropped.
 #[tauri::command]
