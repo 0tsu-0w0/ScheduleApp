@@ -1,5 +1,7 @@
 # ScheduleApp(Nora Schedule 改造版)
 
+[![CI](https://github.com/0tsu-0w0/ScheduleApp/actions/workflows/ci.yml/badge.svg)](https://github.com/0tsu-0w0/ScheduleApp/actions/workflows/ci.yml)
+
 予定、ToDo、Dデイ、メモ、食事・運動、読書・TRPGの記録、集中時間までを1か所で管理する、軽いデスクトップ用スケジュールアプリです。
 データはすべて自分のPCに保存されます。
 
@@ -216,6 +218,8 @@ npm run tauri build    # インストーラーを作成
 npm run check                  # フロントエンドの型検査
 cd src-tauri && cargo test     # バックエンドのテスト
 ```
+
+この2つは、GitHubへのpushとプルリクエストのたびに GitHub Actions(`.github/workflows/ci.yml`、Windows)でも自動で走ります。
 
 開発中に本番のデータではなく別のフォルダーを使うには、環境変数 `NORA_DATA_DIR` で指定してください。
 
