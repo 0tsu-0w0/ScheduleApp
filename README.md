@@ -20,6 +20,20 @@ Windows 10/11、macOS(Apple Silicon・M1以降)。元のNora Scheduleと同じ�
 
 ## 元のNora Scheduleから変えたところ
 
+### 名前と保存先を分けた
+
+元のNora Scheduleと同じPCで使っても、互いのデータを上書きしないようにしました(issue #9)。
+
+| 項目 | 元のNora Schedule | ScheduleApp |
+|---|---|---|
+| 表示名 | Nora Schedule | ScheduleApp |
+| 識別子 | `com.nora.schedule` | `com.otsu.scheduleapp` |
+| データの保存先 | `%APPDATA%\com.nora.schedule` | `%APPDATA%\com.otsu.scheduleapp` |
+| バージョン | 0.3.1 | 1.0.0 から |
+
+- 単一インスタンスの判定、ログイン時の自動起動、OSの資格情報ストア(Google・Notionの認証情報)も、それぞれ別になります
+- ScheduleAppは空の状態で始まります。元のNora Scheduleのデータを使うときは、元のアプリで「設定 → データ → バックアップを書き出す」を行い、ScheduleAppで「バックアップを読み込む」を行ってください。バックアップの形式(`.nora`)は同じです
+
 ### Googleカレンダーの予定の取り込み(閲覧のみ)
 
 Googleカレンダーの予定を、このアプリのカレンダーに表示できるようにしました(Google → アプリの一方向)。設定方法は [docs/google-calendar.md](docs/google-calendar.md) にあります。
@@ -195,7 +209,7 @@ Googleカレンダーを1つ選ぶと、アプリの予定と双方向に同期�
 | 作業時間の記録 | active-win-pos-rs(アクティブなウィンドウの取得) |
 | 改造で追加 | ureq(HTTP通信)、keyring(OSの資格情報ストア)、sha2・base64・getrandom(PKCE)、url・urlencoding、iana-time-zone(タイムゾーン名)、pulldown-cmark(Markdownの解析) |
 
-データはOSのアプリデータフォルダー(Windows: `%APPDATA%\com.nora.schedule`、macOS: `~/Library/Application Support/com.nora.schedule`)に、SQLiteファイルと画像フォルダーとして保存されます。保存先は元のNora Scheduleと同じなので、同じPCで両方を使うとデータを共有します。
+データはOSのアプリデータフォルダー(Windows: `%APPDATA%\com.otsu.scheduleapp`、macOS: `~/Library/Application Support/com.otsu.scheduleapp`)に、SQLiteファイルと画像フォルダーとして保存されます。元のNora Schedule(`com.nora.schedule`)とは別のフォルダーです。
 
 ## 自分でビルドする
 
@@ -211,7 +225,7 @@ npm run tauri dev      # 開発モードで起動
 npm run tauri build    # インストーラーを作成
 ```
 
-ビルドの成果物は `src-tauri/target/release/bundle/` の下にできます(Windows: `nsis/…-setup.exe`、`msi/….msi` · macOS: `macos/Nora Schedule.app`、`dmg/….dmg`)。
+ビルドの成果物は `src-tauri/target/release/bundle/` の下にできます(Windows: `nsis/…-setup.exe`、`msi/….msi` · macOS: `macos/ScheduleApp.app`、`dmg/….dmg`)。
 
 その他のコマンド:
 

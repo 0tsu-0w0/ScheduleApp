@@ -2617,36 +2617,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nora-schedule"
-version = "0.3.1"
-dependencies = [
- "active-win-pos-rs",
- "base64 0.22.1",
- "chrono",
- "getrandom 0.3.4",
- "iana-time-zone",
- "image",
- "keyring",
- "pulldown-cmark",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2",
- "tauri",
- "tauri-build",
- "tauri-plugin-autostart",
- "tauri-plugin-dialog",
- "tauri-plugin-notification",
- "tauri-plugin-opener",
- "tauri-plugin-single-instance",
- "tauri-plugin-window-state",
- "ureq",
- "url",
- "urlencoding",
- "zip",
-]
-
-[[package]]
 name = "notify-rust"
 version = "4.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3707,6 +3677,36 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
+]
+
+[[package]]
+name = "schedule-app"
+version = "1.0.0"
+dependencies = [
+ "active-win-pos-rs",
+ "base64 0.22.1",
+ "chrono",
+ "getrandom 0.3.4",
+ "iana-time-zone",
+ "image",
+ "keyring",
+ "pulldown-cmark",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-autostart",
+ "tauri-plugin-dialog",
+ "tauri-plugin-notification",
+ "tauri-plugin-opener",
+ "tauri-plugin-single-instance",
+ "tauri-plugin-window-state",
+ "ureq",
+ "url",
+ "urlencoding",
+ "zip",
 ]
 
 [[package]]

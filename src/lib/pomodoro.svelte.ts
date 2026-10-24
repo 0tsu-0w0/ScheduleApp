@@ -210,7 +210,7 @@ class Pomodoro {
     this.advance(true, end);
     const body = wasFocus ? t('pomo.doneFocus') : t('pomo.doneBreak');
     toast(body, 'success');
-    sendNotification({ title: 'Nora Schedule', body });
+    sendNotification({ title: 'ScheduleApp', body });
   }
 }
 

@@ -24,7 +24,7 @@ use crate::db::{Db, DbResult, Event, now_ts};
 
 /// Key of the JSON config in the `settings` table.
 const SETTING: &str = "gcal";
-const KEYRING_SERVICE: &str = "com.nora.schedule.gcal";
+const KEYRING_SERVICE: &str = "com.otsu.scheduleapp.gcal";
 const KEY_REFRESH: &str = "refresh-token";
 const KEY_SECRET: &str = "client-secret";
 /// Read-only access is all the import needs (NFR-13).
@@ -539,8 +539,8 @@ fn random_token(bytes: usize) -> CmdResult<String> {
     Ok(URL_SAFE_NO_PAD.encode(buf))
 }
 
-const DONE_PAGE: &str = "<!doctype html><meta charset=utf-8><title>Nora Schedule</title>\
-<body style=\"font-family:system-ui;padding:3em;text-align:center\"><h2>Nora Schedule</h2>\
+const DONE_PAGE: &str = "<!doctype html><meta charset=utf-8><title>ScheduleApp</title>\
+<body style=\"font-family:system-ui;padding:3em;text-align:center\"><h2>ScheduleApp</h2>\
 <p>Google Calendar is connected. You can close this tab.</p>\
 <p>Googleカレンダーと接続しました。このタブを閉じてください。</p></body>";
 
@@ -828,7 +828,7 @@ pub async fn gcal_set_sync_calendar(app: AppHandle, calendar_id: Option<String>)
                     return Err("This calendar is read-only in Google.".into());
                 }
                 if !status.can_write {
-                    return Err("Allow Nora Schedule to change events first (connect again).".into());
+                    return Err("Allow ScheduleApp to change events first (connect again).".into());
                 }
                 // Its read-only leftovers (unsupported series) are shown from the import.
                 cal.selected = true;

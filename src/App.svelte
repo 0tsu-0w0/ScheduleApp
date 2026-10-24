@@ -211,7 +211,7 @@
       <div class="logo"><CircleCheck size={20} strokeWidth={2.5} /></div>
       {#if !collapsed}
         <div class="brand-text" transition:fade={{ duration: 120 }}>
-          <div class="name">Nora</div>
+          <div class="name">ScheduleApp</div>
           <div class="tag truncate">{t('app.tagline')}</div>
         </div>
       {/if}

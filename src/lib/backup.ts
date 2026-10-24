@@ -17,7 +17,7 @@ export function backupError(e: unknown): string {
 
 /** Asks where to save, then writes the backup. Returns false if cancelled or failed. */
 export async function exportBackup(): Promise<boolean> {
-  const path = await save({ defaultPath: `Nora-backup-${today()}.nora`, filters: filters() }).catch(() => null);
+  const path = await save({ defaultPath: `ScheduleApp-backup-${today()}.nora`, filters: filters() }).catch(() => null);
   if (!path) return false;
   try {
     await api.exportData(path);

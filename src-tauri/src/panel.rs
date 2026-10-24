@@ -92,7 +92,7 @@ pub fn open(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     let saved = saved_bounds(app);
     // Created hidden, placed, then shown, so it never flashes in the wrong spot.
     let w = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("index.html".into()))
-        .title("Nora Schedule")
+        .title("ScheduleApp")
         .decorations(false)
         .skip_taskbar(true)
         .always_on_top(on_top(app))

@@ -23,7 +23,7 @@ const CONFIG_KEY: &str = "autobackup";
 const STATUS_KEY: &str = "autobackup.status";
 const CHECK_EVERY: Duration = Duration::from_secs(60);
 /// Our files start with this; pruning never touches anything else in the folder.
-const PREFIX: &str = "Nora-auto-";
+const PREFIX: &str = "ScheduleApp-auto-";
 const EXT: &str = "nora";
 pub const MIN_KEEP: u32 = 1;
 pub const MAX_KEEP: u32 = 100;
@@ -252,13 +252,13 @@ mod tests {
     #[test]
     fn prune_keeps_the_newest_and_leaves_other_files_alone() {
         let dir = temp_dir("prune");
-        for name in ["Nora-auto-2026-10-01_090000.nora", "Nora-auto-2026-10-02_090000.nora", "Nora-auto-2026-10-03_090000.nora", "my-backup.nora", "Nora-auto-notes.txt"] {
+        for name in ["ScheduleApp-auto-2026-10-01_090000.nora", "ScheduleApp-auto-2026-10-02_090000.nora", "ScheduleApp-auto-2026-10-03_090000.nora", "my-backup.nora", "ScheduleApp-auto-notes.txt"] {
             std::fs::write(dir.join(name), b"x").unwrap();
         }
         prune(&dir, 2);
         let mut left: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
         left.sort();
-        assert_eq!(left, ["Nora-auto-2026-10-02_090000.nora", "Nora-auto-2026-10-03_090000.nora", "Nora-auto-notes.txt", "my-backup.nora"]);
+        assert_eq!(left, ["ScheduleApp-auto-2026-10-02_090000.nora", "ScheduleApp-auto-2026-10-03_090000.nora", "ScheduleApp-auto-notes.txt", "my-backup.nora"]);
         let _ = std::fs::remove_dir_all(dir);
     }
 

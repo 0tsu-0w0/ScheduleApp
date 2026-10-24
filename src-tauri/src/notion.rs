@@ -31,7 +31,7 @@ type CmdResult<T> = Result<T, String>;
 
 const CONFIG_KEY: &str = "notion";
 const RUN_KEY: &str = "notion.status";
-const KEYRING_SERVICE: &str = "com.nora.schedule.notion";
+const KEYRING_SERVICE: &str = "com.otsu.scheduleapp.notion";
 const KEY_TOKEN: &str = "token";
 const API: &str = "https://api.notion.com/v1";
 const VERSION: &str = "2022-06-28";
