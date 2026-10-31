@@ -294,6 +294,8 @@ export type NotionKind = 'memo' | 'book' | 'trpg';
 
 export interface NotionTarget {
   database_id: string;
+  /** The data source pages are written to (empty in settings saved before data sources). */
+  data_source_id: string;
   database_title: string;
   /** App field id → Notion property name. */
   mapping: Record<string, string>;
@@ -324,6 +326,10 @@ export interface NotionStatus {
 export interface NotionDatabase {
   id: string;
   title: string;
+  /** The database's data sources; most have exactly one. */
+  data_sources: { id: string; name: string }[];
+  /** The data source whose properties are listed. */
+  data_source_id: string;
   /** Property name → Notion type. */
   properties: Record<string, string>;
 }
@@ -406,7 +412,8 @@ export const api = {
   notionConnect: (token: string) => invoke<NotionStatus>('notion_connect', { token }),
   notionDisconnect: () => invoke<NotionStatus>('notion_disconnect'),
   /** Reads a database (link or id) so its properties can be mapped. */
-  notionDatabase: (reference: string) => invoke<NotionDatabase>('notion_database', { reference }),
+  notionDatabase: (reference: string, dataSource: string | null = null) =>
+    invoke<NotionDatabase>('notion_database', { reference, dataSource }),
   notionSetTarget: (kind: NotionKind, target: NotionTarget | null) => invoke<NotionStatus>('notion_set_target', { kind, target }),
   notionSetAuto: (auto: boolean) => invoke<NotionStatus>('notion_set_auto', { auto }),
   /** Exports one kind (or all); failures are reported in `last_error`. */

@@ -224,7 +224,9 @@ export function installMock() {
       case 'notion_status': return JSON.parse(JSON.stringify(notion));
       case 'notion_connect': notion.connected = true; notion.config.workspace = 'My workspace'; return JSON.parse(JSON.stringify(notion));
       case 'notion_disconnect': notion.connected = false; return JSON.parse(JSON.stringify(notion));
-      case 'notion_database': return { id: '0123456789abcdef0123456789abcdef', title: 'Reading list', properties: { Name: 'title', Author: 'rich_text', Status: 'select', Rating: 'number', Finished: 'date', Tags: 'multi_select' } };
+      case 'notion_database': return { id: '0123456789abcdef0123456789abcdef', title: 'Reading list',
+        data_sources: [{ id: 'ds-books', name: 'Books' }, { id: 'ds-comics', name: 'Comics' }], data_source_id: a.dataSource ?? 'ds-books',
+        properties: a.dataSource === 'ds-comics' ? { Title: 'title', Volume: 'number' } : { Name: 'title', Author: 'rich_text', Status: 'select', Rating: 'number', Finished: 'date', Tags: 'multi_select' } };
       case 'notion_set_target': if (a.target) notion.config.targets[a.kind as 'book'] = a.target; else delete notion.config.targets[a.kind as 'book']; return JSON.parse(JSON.stringify(notion));
       case 'notion_set_auto': notion.config.auto = a.auto; return JSON.parse(JSON.stringify(notion));
       case 'notion_export': Object.assign(notion, { last_run: Math.floor(Date.now() / 1000), last_error: null, last_report: { created: 3, updated: 1, unchanged: 0, archived: 0, skipped_elements: 1 } }); return JSON.parse(JSON.stringify(notion));

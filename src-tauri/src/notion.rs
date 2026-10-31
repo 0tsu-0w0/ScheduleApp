@@ -8,7 +8,9 @@
 //!   page's content.
 //! - `notion_pages` remembers which page holds which item and hashes of what was sent,
 //!   so unchanged items cost no requests and nothing is duplicated (FR-13.5).
-//! - Items deleted in Nora are archived in Notion.
+//! - Items deleted in Nora are moved to the trash in Notion.
+//! - Uses Notion API 2026-03-11: a database holds one or more data sources; the property
+//!   schema and new pages belong to a data source, and `archived` is now `in_trash` (issue #12).
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -34,7 +36,7 @@ const RUN_KEY: &str = "notion.status";
 const KEYRING_SERVICE: &str = "com.otsu.scheduleapp.notion";
 const KEY_TOKEN: &str = "token";
 const API: &str = "https://api.notion.com/v1";
-const VERSION: &str = "2022-06-28";
+const VERSION: &str = "2026-03-11";
 /// How often automatic export checks for changes.
 const AUTO_EVERY: Duration = Duration::from_secs(5 * 60);
 /// Notion's limit for one piece of rich text.
@@ -543,6 +545,9 @@ pub fn markdown_to_blocks(md: &str) -> (Vec<Value>, u32) {
 #[serde(default)]
 pub struct Target {
     pub database_id: String,
+    /// The database's data source pages are written to. Empty in settings saved before
+    /// API 2025-09-03; filled in on the next export.
+    pub data_source_id: String,
     pub database_title: String,
     /// Nora field id → Notion property name.
     pub mapping: BTreeMap<String, String>,
@@ -799,17 +804,68 @@ impl Client {
     }
 }
 
-/// Reads a database's title and properties.
-fn fetch_database(client: &Client, id: &str) -> CmdResult<(String, BTreeMap<String, String>)> {
-    let json = client.ok(client.get(&format!("/databases/{id}"))?)?;
-    let title = json["title"].as_array().into_iter().flatten().filter_map(|t| t["plain_text"].as_str()).collect::<String>();
-    let types = json["properties"]
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DataSource {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct DatabaseInfo {
+    pub id: String,
+    pub title: String,
+    /// The database's data sources; most databases have exactly one.
+    pub data_sources: Vec<DataSource>,
+    /// The data source whose properties are listed.
+    pub data_source_id: String,
+    /// Property name → Notion type.
+    pub properties: BTreeMap<String, String>,
+}
+
+fn plain_text(rich: &Value) -> String {
+    rich.as_array().into_iter().flatten().filter_map(|t| t["plain_text"].as_str()).collect()
+}
+
+/// The `data_sources` listed by "Retrieve a database".
+pub fn data_sources(database: &Value) -> Vec<DataSource> {
+    database["data_sources"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|d| Some(DataSource { id: d["id"].as_str()?.to_owned(), name: d["name"].as_str().unwrap_or_default().to_owned() }))
+        .collect()
+}
+
+/// Property name → type, from "Retrieve a data source".
+pub fn property_types(source: &Value) -> BTreeMap<String, String> {
+    source["properties"]
         .as_object()
         .into_iter()
         .flatten()
         .filter_map(|(name, p)| p["type"].as_str().map(|t| (name.clone(), t.to_owned())))
-        .collect();
-    Ok((title, types))
+        .collect()
+}
+
+/// The parent of a new page: a data source (a database parent fails once a database has two).
+pub fn page_parent(data_source_id: &str) -> Value {
+    json!({ "type": "data_source_id", "data_source_id": data_source_id })
+}
+
+/// Reads a database, picks `data_source` (or its first data source) and reads that one's properties.
+fn fetch_database(client: &Client, id: &str, data_source: Option<&str>) -> CmdResult<DatabaseInfo> {
+    let database = client.ok(client.get(&format!("/databases/{id}"))?)?;
+    let sources = data_sources(&database);
+    let chosen = data_source
+        .filter(|d| sources.iter().any(|s| s.id == *d))
+        .or_else(|| sources.first().map(|s| s.id.as_str()))
+        .ok_or("This database has no data source the integration can read.")?
+        .to_owned();
+    let source = client.ok(client.get(&format!("/data_sources/{chosen}"))?)?;
+    let mut title = plain_text(&database["title"]);
+    if title.is_empty() {
+        title = plain_text(&source["title"]);
+    }
+    Ok(DatabaseInfo { id: id.to_owned(), title, data_sources: sources, data_source_id: chosen, properties: property_types(&source) })
 }
 
 /// Exports one kind. Unchanged items are skipped without any request.
@@ -829,7 +885,7 @@ fn export_kind(client: &Client, db: &Db, kind: Kind, target: &Target, locale: &s
                 continue;
             }
             let (status, json) = client.with_body("PATCH", &format!("/pages/{}", row.page_id), &json!({ "properties": props }))?;
-            let gone = status == 404 || json["archived"].as_bool() == Some(true) || json["in_trash"].as_bool() == Some(true);
+            let gone = status == 404 || json["in_trash"].as_bool() == Some(true);
             if (200..300).contains(&status) && !gone {
                 if row.body_hash != body_hash {
                     client.clear(&row.page_id)?;
@@ -850,7 +906,7 @@ fn export_kind(client: &Client, db: &Db, kind: Kind, target: &Target, locale: &s
         let json = client.ok(client.with_body(
             "POST",
             "/pages",
-            &json!({ "parent": { "database_id": db_id }, "properties": props, "children": first }),
+            &json!({ "parent": page_parent(&target.data_source_id), "properties": props, "children": first }),
         )?)?;
         let page_id = json["id"].as_str().ok_or("Notion sent no page id")?.to_owned();
         if blocks.len() > BLOCK_BATCH {
@@ -862,13 +918,13 @@ fn export_kind(client: &Client, db: &Db, kind: Kind, target: &Target, locale: &s
         report.skipped_elements += skipped;
     }
 
-    // Items deleted in Nora: archive their pages.
+    // Items deleted in Nora: move their pages to the trash.
     let alive: std::collections::HashSet<i64> = items.iter().map(|i| i.id).collect();
     for (item_id, page_id) in db.notion_item_ids(kind).map_err(|e| e.to_string())? {
         if alive.contains(&item_id) {
             continue;
         }
-        let (status, json) = client.with_body("PATCH", &format!("/pages/{page_id}"), &json!({ "archived": true }))?;
+        let (status, json) = client.with_body("PATCH", &format!("/pages/{page_id}"), &json!({ "in_trash": true }))?;
         if !(200..300).contains(&status) && status != 404 {
             return Err(notion_error(status, &json));
         }
@@ -888,6 +944,7 @@ fn run_export(data_dir: &Path, only: Option<Kind>, refresh_schema: bool) -> CmdR
     let mut config: NotionConfig = read(&db, CONFIG_KEY);
     let locale = db.setting("ui.locale").ok().flatten().unwrap_or_else(|| "en".into());
     let mut report = Report::default();
+    let mut changed = false;
 
     let result = (|| -> CmdResult<()> {
         let token = token().ok_or("Not connected to Notion.")?;
@@ -897,18 +954,22 @@ fn run_export(data_dir: &Path, only: Option<Kind>, refresh_schema: bool) -> CmdR
                 continue;
             }
             let Some(target) = config.targets.get_mut(&kind) else { continue };
-            if refresh_schema {
-                // Pick up renamed or retyped properties before writing.
-                let (title, types) = fetch_database(&client, &target.database_id)?;
-                target.database_title = title;
-                target.types = types;
+            // Settings saved before data sources existed get their (only) data source now.
+            if refresh_schema || target.data_source_id.is_empty() {
+                // Also picks up renamed or retyped properties before writing.
+                let chosen = Some(target.data_source_id.as_str()).filter(|d| !d.is_empty());
+                let info = fetch_database(&client, &target.database_id, chosen)?;
+                target.database_title = info.title;
+                target.data_source_id = info.data_source_id;
+                target.types = info.properties;
+                changed = true;
             }
             export_kind(&client, &db, kind, target, &locale, &mut report)?;
         }
         Ok(())
     })();
 
-    if refresh_schema {
+    if changed {
         write(&db, CONFIG_KEY, &config)?;
     }
     let mut run: NotionRun = read(&db, RUN_KEY);
@@ -993,21 +1054,14 @@ pub fn notion_disconnect(app: AppHandle) -> CmdResult<NotionStatus> {
     with_db(&app, status)
 }
 
-#[derive(Clone, Debug, Serialize)]
-pub struct DatabaseInfo {
-    pub id: String,
-    pub title: String,
-    pub properties: BTreeMap<String, String>,
-}
-
-/// Reads a database (by URL or id) so its properties can be mapped.
+/// Reads a database (by URL or id) and one of its data sources (the first by default),
+/// so its properties can be mapped.
 #[tauri::command]
-pub async fn notion_database(reference: String) -> CmdResult<DatabaseInfo> {
+pub async fn notion_database(reference: String, data_source: Option<String>) -> CmdResult<DatabaseInfo> {
     let id = database_id(&reference).ok_or("That doesn't look like a Notion database link.")?;
     blocking(move || {
         let token = token().ok_or("Not connected to Notion.")?;
-        let (title, properties) = fetch_database(&Client::new(&token), &id)?;
-        Ok(DatabaseInfo { id, title, properties })
+        fetch_database(&Client::new(&token), &id, data_source.as_deref())
     })
     .await
 }
@@ -1165,5 +1219,34 @@ mod tests {
         assert_eq!(books[0].body, "**Good**");
         drop(db);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn data_sources_and_their_properties_are_read() {
+        let database = json!({
+            "object": "database",
+            "title": [{ "plain_text": "Reading" }],
+            "data_sources": [{ "id": "ds-1", "name": "Books" }, { "id": "ds-2", "name": "Comics" }],
+        });
+        assert_eq!(
+            data_sources(&database),
+            [DataSource { id: "ds-1".into(), name: "Books".into() }, DataSource { id: "ds-2".into(), name: "Comics".into() }]
+        );
+        let source = json!({
+            "object": "data_source",
+            "properties": { "Name": { "id": "title", "type": "title", "title": {} }, "Author": { "id": "a", "type": "rich_text" } },
+        });
+        let types = property_types(&source);
+        assert_eq!(types.get("Name").map(String::as_str), Some("title"));
+        assert_eq!(types.get("Author").map(String::as_str), Some("rich_text"));
+        assert_eq!(plain_text(&database["title"]), "Reading");
+    }
+
+    #[test]
+    fn pages_go_under_the_data_source() {
+        assert_eq!(page_parent("ds-1"), json!({ "type": "data_source_id", "data_source_id": "ds-1" }));
+        // Settings from before data sources load with an empty id (filled in on export).
+        let old: Target = serde_json::from_value(json!({ "database_id": "db", "mapping": {}, "types": {}, "body": true })).unwrap();
+        assert!(old.data_source_id.is_empty());
     }
 }

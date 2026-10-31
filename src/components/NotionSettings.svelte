@@ -61,7 +61,9 @@
     editing = {
       kind,
       link: target?.database_id ?? '',
-      db: target ? { id: target.database_id, title: target.database_title, properties: target.types } : null,
+      db: target
+        ? { id: target.database_id, title: target.database_title, data_sources: [], data_source_id: target.data_source_id, properties: target.types }
+        : null,
       mapping: { ...(target?.mapping ?? {}) },
       body: target?.body ?? true,
     };
@@ -82,9 +84,9 @@
     return out;
   }
 
-  async function loadDatabase() {
+  async function loadDatabase(dataSource: string | null = null) {
     if (!editing) return;
-    const db = await run(() => api.notionDatabase(editing!.link));
+    const db = await run(() => api.notionDatabase(editing!.link, dataSource));
     if (db && editing) {
       editing.db = db;
       editing.mapping = guessMapping(editing.kind, db);
@@ -102,6 +104,7 @@
     const mapping = Object.fromEntries(Object.entries(editing.mapping).filter(([, p]) => p));
     const target: NotionTarget = {
       database_id: editing.db.id,
+      data_source_id: editing.db.data_source_id,
       database_title: editing.db.title,
       mapping,
       types: editing.db.properties,
@@ -202,12 +205,23 @@
             <div class="edit">
               <div class="row tight">
                 <input class="input grow" bind:value={editing.link} placeholder={t('notion.dbLink')} spellcheck="false" />
-                <button class="btn small" onclick={loadDatabase} disabled={busy || !editing.link.trim()}>
+                <button class="btn small" onclick={() => loadDatabase()} disabled={busy || !editing.link.trim()}>
                   {#if busy}<span class="spin"><LoaderCircle size={14} /></span>{/if} {t('notion.load')}
                 </button>
               </div>
               {#if editing.db}
                 <p class="small muted">{t('notion.to', { name: editing.db.title || editing.db.id })}</p>
+                {#if editing.db.data_sources.length > 1}
+                  <div class="mapping">
+                    <span class="small">{t('notion.dataSource')}</span>
+                    <Select
+                      value={editing.db.data_source_id}
+                      options={editing.db.data_sources.map((d) => ({ value: d.id, label: d.name || d.id }))}
+                      onchange={(id) => loadDatabase(id)}
+                      label={t('notion.dataSource')}
+                    />
+                  </div>
+                {/if}
                 {#if !hasTitle}<p class="error small"><TriangleAlert size={14} /> {t('notion.noTitle')}</p>{/if}
                 <div class="mapping">
                   {#each fieldsOf(kind) as f (f.id)}
